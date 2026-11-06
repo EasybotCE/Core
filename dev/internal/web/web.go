@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,6 +25,7 @@ import (
 
 	"easybot/internal/adapter/onebot11"
 	"easybot/internal/auth"
+	"easybot/internal/bridge"
 	"easybot/internal/config"
 	"easybot/internal/runtime"
 	"easybot/internal/store"
@@ -37,6 +39,7 @@ type server struct {
 	logs           *runtime.LogBuffer
 	logWriter      *runtime.AsyncLogWriter
 	adapterManager *onebot11.Manager
+	bridgeManager  *bridge.Manager
 	loginMu        sync.Mutex
 	loginAttempts  map[string]loginAttempt
 }
@@ -58,7 +61,11 @@ func NewWithAdapterManager(db *store.Store, logger *slog.Logger, logs *runtime.L
 }
 
 func NewForListener(db *store.Store, logger *slog.Logger, logs *runtime.LogBuffer, adapters *onebot11.Manager, address string, token *auth.Token, writers ...*runtime.AsyncLogWriter) http.Handler {
-	s := &server{store: db, logger: logger, logs: logs, adapterManager: adapters, loginAttempts: make(map[string]loginAttempt)}
+	return NewForListenerWithRuntimes(db, logger, logs, adapters, nil, address, token, writers...)
+}
+
+func NewForListenerWithRuntimes(db *store.Store, logger *slog.Logger, logs *runtime.LogBuffer, adapters *onebot11.Manager, bridges *bridge.Manager, address string, token *auth.Token, writers ...*runtime.AsyncLogWriter) http.Handler {
+	s := &server{store: db, logger: logger, logs: logs, adapterManager: adapters, bridgeManager: bridges, loginAttempts: make(map[string]loginAttempt)}
 	s.localOnly = config.IsLoopbackListener(address)
 	s.loginToken = token
 	if len(writers) > 0 {
@@ -91,6 +98,13 @@ func NewForListener(db *store.Store, logger *slog.Logger, logs *runtime.LogBuffe
 	mux.HandleFunc("GET /api/logs", s.recentLogs)
 	mux.HandleFunc("GET /api/logs/status", s.logStatus)
 	mux.HandleFunc("PUT /api/logs/settings", s.updateLogSettings)
+	mux.HandleFunc("GET /api/bridge/status", s.bridgeStatuses)
+	mux.HandleFunc("GET /api/bridge/{id}/status", s.bridgeStatus)
+	mux.HandleFunc("POST /api/bridge/{id}/send", s.bridgeSend)
+	mux.HandleFunc("POST /api/servers/{id}/token", s.rotateServerToken)
+	if s.bridgeManager != nil {
+		mux.Handle("/bridge", s.bridgeManager)
+	}
 	mux.Handle("/", http.FileServer(http.Dir(staticDirectory())))
 	handler := s.security(s.cors(mux))
 	allowedHosts := os.Getenv("EASYBOT_ALLOWED_HOSTS")
@@ -259,6 +273,24 @@ func (w *statusRecorder) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
+// Hijack is required for WebSocket upgrades, which take over the raw
+// connection after the handshake.
+func (w *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func (w *statusRecorder) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (s *server) observe(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recorder := &statusRecorder{ResponseWriter: w}
@@ -319,6 +351,14 @@ func (s *server) createRecord(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &item) {
 		return
 	}
+	if item.Kind == "servers" {
+		detail, err := ensureServerToken(item.Detail)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "server config must be valid JSON"})
+			return
+		}
+		item.Detail = detail
+	}
 	item, err := s.store.Save(r.Context(), item)
 	if err != nil {
 		writeStoreError(w, err)
@@ -336,6 +376,15 @@ func (s *server) updateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item.ID, item.Kind = r.PathValue("id"), r.PathValue("kind")
+	if item.Kind == "servers" && serverToken(item.Detail) == "" {
+		if existing, err := s.store.Get(r.Context(), "servers", item.ID); err == nil {
+			if token := serverToken(existing.Detail); token != "" {
+				if detail, err := setServerToken(item.Detail, token); err == nil {
+					item.Detail = detail
+				}
+			}
+		}
+	}
 	item, err := s.store.Save(r.Context(), item)
 	if err != nil {
 		writeStoreError(w, err)
@@ -596,6 +645,145 @@ func (s *server) adapterGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, groups)
+}
+
+func (s *server) bridgeStatuses(w http.ResponseWriter, _ *http.Request) {
+	if s.bridgeManager == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "Minecraft bridge runtime is unavailable."})
+		return
+	}
+	statuses, err := s.bridgeManager.Statuses()
+	if err != nil {
+		http.Error(w, "bridge status unavailable", http.StatusInternalServerError)
+		return
+	}
+	items := make([]bridge.Status, 0, len(statuses))
+	for _, status := range statuses {
+		items = append(items, status)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ServerName < items[j].ServerName })
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *server) bridgeStatus(w http.ResponseWriter, r *http.Request) {
+	if s.bridgeManager == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "Minecraft bridge runtime is unavailable."})
+		return
+	}
+	status, err := s.bridgeManager.Status(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, bridge.ErrUnknownServer) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "server not found"})
+			return
+		}
+		http.Error(w, "bridge status unavailable", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *server) bridgeSend(w http.ResponseWriter, r *http.Request) {
+	if s.bridgeManager == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "Minecraft bridge runtime is unavailable."})
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" || len(text) > 2000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "text must be 1-2000 bytes"})
+		return
+	}
+	if err := s.bridgeManager.SendToChat(r.PathValue("id"), text); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"sent": true})
+}
+
+func (s *server) rotateServerToken(w http.ResponseWriter, r *http.Request) {
+	record, err := s.store.Get(r.Context(), "servers", r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	token, err := newServerToken()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "could not generate a server token"})
+		return
+	}
+	detail, err := setServerToken(record.Detail, token)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "stored server config is invalid JSON"})
+		return
+	}
+	record.Detail = detail
+	if _, err := s.store.Save(r.Context(), record); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.logs.Add("warn", "bridge", "Minecraft server token rotated: "+record.Name)
+	writeJSON(w, http.StatusOK, map[string]string{"serverId": record.ID, "token": token})
+}
+
+func newServerToken() (string, error) {
+	value := make([]byte, 24)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value), nil
+}
+
+func setServerToken(detail, token string) (string, error) {
+	values := make(map[string]json.RawMessage)
+	if strings.TrimSpace(detail) != "" {
+		if err := json.Unmarshal([]byte(detail), &values); err != nil {
+			return detail, err
+		}
+	}
+	encoded, err := json.Marshal(token)
+	if err != nil {
+		return detail, err
+	}
+	values["token"] = encoded
+	result, err := json.Marshal(values)
+	if err != nil {
+		return detail, err
+	}
+	return string(result), nil
+}
+
+func serverToken(detail string) string {
+	var values map[string]json.RawMessage
+	if json.Unmarshal([]byte(detail), &values) != nil {
+		return ""
+	}
+	for _, key := range []string{"token", "Token", "serverToken"} {
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if json.Unmarshal(raw, &value) == nil && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func ensureServerToken(detail string) (string, error) {
+	if serverToken(detail) != "" {
+		return detail, nil
+	}
+	token, err := newServerToken()
+	if err != nil {
+		return detail, err
+	}
+	return setServerToken(detail, token)
 }
 
 func (s *server) adapterRecord(ctx context.Context, id string) (store.Record, error) {

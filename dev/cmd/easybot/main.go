@@ -14,6 +14,7 @@ import (
 
 	"easybot/internal/adapter/onebot11"
 	"easybot/internal/auth"
+	"easybot/internal/bridge"
 	"easybot/internal/config"
 	"easybot/internal/runtime"
 	"easybot/internal/store"
@@ -135,9 +136,43 @@ func run() (code int) {
 	} else {
 		logger.Info(fmt.Sprintf("[AdapterManager] 发现 %d 个适配器配置", len(adapterConfigs)))
 	}
+	var eventRouter *bridge.Router
 	adapters := onebot11.NewManager(ctx, db, func(id string, event onebot11.Event) {
 		logs.Add("info", "adapter", "Adapter event received: "+event.Type+" (adapter "+id+")")
+		if eventRouter == nil || event.Type != "message" || event.MessageType != "group" {
+			return
+		}
+		if event.SelfID != "" && event.SenderID == event.SelfID {
+			return
+		}
+		eventRouter.OnSocialMessage(id, event.PeerID, event.SenderName, event.Content)
 	})
+	bridges := bridge.NewManager(db, logger, bridge.Callbacks{
+		OnChat: func(serverID string, packet bridge.SyncMessagePacket) {
+			logs.Add("info", "bridge", "Minecraft chat from "+packet.Player.PlayerName+": "+packet.Message)
+			if eventRouter != nil {
+				eventRouter.OnMinecraftChat(serverID, packet)
+			}
+		},
+		OnEnterExit: func(serverID string, packet bridge.SyncEnterExitMessagePacket) {
+			state := "left"
+			if packet.IsEnter {
+				state = "joined"
+			}
+			logs.Add("info", "bridge", "Player "+packet.Player.PlayerName+" "+state+" (server "+serverID+")")
+		},
+		OnDeath: func(serverID string, packet bridge.SyncDeathMessagePacket) {
+			logs.Add("info", "bridge", "Player death on server "+serverID+": "+packet.Raw)
+		},
+		OnState: func(serverID string, online bool) {
+			if online {
+				logs.Add("info", "bridge", "Minecraft server connected: "+serverID)
+				return
+			}
+			logs.Add("warn", "bridge", "Minecraft server disconnected: "+serverID)
+		},
+	})
+	eventRouter = bridge.NewRouter(db, bridges, adapters, logger)
 	if err := adapters.StartEnabled(ctx); err != nil {
 		logger.Error("[AdapterManager] 适配器初始化失败", "error", err)
 	} else {
@@ -166,7 +201,7 @@ func run() (code int) {
 	logger.Info("[WebUI] 正在初始化管理服务...")
 	server := &http.Server{
 		Addr:              address,
-		Handler:           web.NewForListener(db, logger, logs, adapters, listener.Addr().String(), loginToken, writer),
+		Handler:           web.NewForListenerWithRuntimes(db, logger, logs, adapters, bridges, listener.Addr().String(), loginToken, writer),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

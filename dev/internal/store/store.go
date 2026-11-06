@@ -79,14 +79,17 @@ func Open(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(4)
 	if dialect == "sqlite" {
-		// SQLite 只有一个写入者，串行使用连接，避免异步日志与管理写入争抢锁。
+		// SQLite 只有一个写入者。固定单连接可让 WAL / busy_timeout 这类
+		// 连接级 PRAGMA 对每条语句生效，避免异步日志写入与管理 API 写入
+		// 争抢锁产生 SQLITE_BUSY。
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
+	} else {
+		db.SetMaxOpenConns(16)
+		db.SetMaxIdleConns(4)
+		db.SetConnMaxLifetime(30 * time.Minute)
 	}
-	db.SetConnMaxLifetime(30 * time.Minute)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err = db.PingContext(ctx); err == nil {
@@ -508,6 +511,17 @@ func (s *Store) RevokeSession(ctx context.Context, tokenHash string) error {
 
 func (s *Store) Dialect() string { return s.dialect }
 func (s *Store) Close() error    { return s.db.Close() }
+
+// Get loads a single record by kind and id.
+func (s *Store) Get(ctx context.Context, kind, id string) (Record, error) {
+	var item Record
+	err := s.db.QueryRowContext(ctx, s.query(`SELECT id,kind,name,detail,enabled,created_at,updated_at FROM records WHERE kind=? AND id=?`), kind, id).
+		Scan(&item.ID, &item.Kind, &item.Name, &item.Detail, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return Record{}, err
+	}
+	return item, nil
+}
 
 func (s *Store) List(ctx context.Context, kind string) ([]Record, error) {
 	rows, err := s.db.QueryContext(ctx, s.query(`SELECT id,kind,name,detail,enabled,created_at,updated_at FROM records WHERE kind=? ORDER BY updated_at DESC`), kind)
