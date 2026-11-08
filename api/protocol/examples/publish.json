@@ -1,0 +1,11 @@
+{
+  "v": "0.1.0",
+  "id": "p1",
+  "type": "message.publish",
+  "payload": {
+    "channel_id": "chat",
+    "sender_id": "player-1",
+    "sender_name": "Steve",
+    "text": "hello world"
+  }
+}

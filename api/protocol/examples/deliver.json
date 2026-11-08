@@ -1,0 +1,15 @@
+{
+  "v": "0.1.0",
+  "id": "d1",
+  "type": "message.deliver",
+  "payload": {
+    "binding_id": "to-survival",
+    "source_endpoint_id": "lobby",
+    "source_message_id": "p1",
+    "source_channel_id": "chat",
+    "channel_id": "chat",
+    "sender_id": "player-1",
+    "sender_name": "Steve",
+    "text": "[lobby] Steve: hello world"
+  }
+}

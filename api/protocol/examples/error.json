@@ -1,0 +1,10 @@
+{
+  "v": "0.1.0",
+  "id": "error-1",
+  "reply_to": "hello-1",
+  "type": "session.error",
+  "payload": {
+    "code": "unsupported_version",
+    "message": "No mutually supported protocol version"
+  }
+}

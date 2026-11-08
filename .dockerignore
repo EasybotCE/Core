@@ -1,0 +1,8 @@
+.git
+.cache
+.idea
+bin
+config.local.*
+*.db
+*.db-shm
+*.db-wal

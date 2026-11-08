@@ -1,0 +1,72 @@
+name: Go CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          $files = @(gofmt -l cmd internal api)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($files.Count -gt 0) {
+            $files | Write-Output
+            throw 'Run gofmt on the files listed above.'
+          }
+      - run: go mod verify
+      - run: go vet -mod=readonly ./...
+      - run: go test -mod=readonly -count=1 ./...
+      - name: Build without CGO
+        env:
+          CGO_ENABLED: '0'
+        run: go build -mod=readonly -trimpath ./cmd/...
+      - name: Race detector
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: '1'
+        run: go test -mod=readonly -race ./...
+
+  databases:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check sqlc generated queries
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+          git diff --exit-code -- internal/store/sqlgen
+      - name: SQLite integration
+        env:
+          CGO_ENABLED: '0'
+        run: go test -mod=readonly -count=1 ./internal/store ./internal/httpapi
+      - name: MySQL and PostgreSQL containers
+        env:
+          CGO_ENABLED: '0'
+        run: go test -mod=readonly -tags integration -count=1 -timeout 10m ./internal/store
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container image
+        run: docker build --pull -t easybotce:ci .

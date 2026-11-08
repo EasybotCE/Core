@@ -1,0 +1,15 @@
+services:
+  hub:
+    build: .
+    restart: unless-stopped
+    environment:
+      EASYBOTCE_ADMIN_TOKEN: ${EASYBOTCE_ADMIN_TOKEN:?Set a strong admin token in the environment}
+      EASYBOTCE_DATABASE_DRIVER: sqlite
+      EASYBOTCE_DATABASE_DSN: /data/easybotce.db
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - easybotce-data:/data
+
+volumes:
+  easybotce-data:

@@ -1,0 +1,16 @@
+{
+  "v": "0.1.0",
+  "id": "hello-1",
+  "type": "session.hello",
+  "payload": {
+    "endpoint_id": "paper-lobby",
+    "endpoint_type": "mc-server",
+    "versions": [
+      "0.1.0"
+    ],
+    "capabilities": [
+      "chat.receive",
+      "command.execute"
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: internal/store/sql/schema.sql
+    queries: internal/store/sql/queries.sql
+    gen:
+      go:
+        package: "sqlite"
+        out: internal/store/sqlgen/sqlite
+        sql_package: "database/sql"
+        emit_empty_slices: true
+        overrides:
+          - db_type: "integer"
+            go_type: "int64"
+          - db_type: "int"
+            go_type: "int64"
+          - db_type: "bigint"
+            go_type: "int64"
+          - db_type: "pg_catalog.int4"
+            go_type: "int64"
+          - db_type: "pg_catalog.int8"
+            go_type: "int64"
+  - engine: "mysql"
+    schema: internal/store/sql/schema.sql
+    queries: internal/store/sql/mysql.sql
+    gen:
+      go:
+        package: "mysql"
+        out: internal/store/sqlgen/mysql
+        sql_package: "database/sql"
+        emit_empty_slices: true
+        overrides:
+          - db_type: "integer"
+            go_type: "int64"
+          - db_type: "int"
+            go_type: "int64"
+          - db_type: "bigint"
+            go_type: "int64"
+          - db_type: "pg_catalog.int4"
+            go_type: "int64"
+          - db_type: "pg_catalog.int8"
+            go_type: "int64"
+  - engine: "postgresql"
+    schema: internal/store/sql/schema.sql
+    queries: internal/store/sql/queries.sql
+    gen:
+      go:
+        package: "postgres"
+        out: internal/store/sqlgen/postgres
+        sql_package: "database/sql"
+        emit_empty_slices: true
+        overrides:
+          - db_type: "integer"
+            go_type: "int64"
+          - db_type: "int"
+            go_type: "int64"
+          - db_type: "bigint"
+            go_type: "int64"
+          - db_type: "pg_catalog.int4"
+            go_type: "int64"
+          - db_type: "pg_catalog.int8"
+            go_type: "int64"

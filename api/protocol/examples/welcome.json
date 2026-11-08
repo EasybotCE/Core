@@ -1,0 +1,14 @@
+{
+  "v": "0.1.0",
+  "id": "welcome-1",
+  "reply_to": "hello-1",
+  "type": "session.welcome",
+  "payload": {
+    "session_id": "session-1",
+    "version": "0.1.0",
+    "capabilities": [
+      "chat.receive"
+    ],
+    "heartbeat_interval_ms": 30000
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": "0.1.0",
+  "id": "a1",
+  "type": "message.accepted",
+  "reply_to": "p1",
+  "payload": {
+    "queued": 1,
+    "filtered": 0,
+    "dropped": 1,
+    "duplicate": false
+  }
+}

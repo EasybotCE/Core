@@ -1,0 +1,13 @@
+/.idea/
+/.cache/
+/bin/
+/dist/
+/coverage.out
+/coverage.html
+/hub
+/hub.exe
+/config.local.*
+.env
+*.db
+*.db-shm
+*.db-wal

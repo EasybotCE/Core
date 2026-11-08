@@ -1,0 +1,14 @@
+# Minimal bootstrap only; business settings will live in the database.
+# Copy to config.local.yaml and start: go run ./cmd/hub -config config.local.yaml
+# Supply EASYBOTCE_ADMIN_TOKEN separately. Never commit real credentials.
+listen_addr: "127.0.0.1:8080"
+log_level: "info"
+shutdown_timeout: "10s"
+# SQLite is the default. Store this file/database on a persistent writable volume.
+database_driver: "sqlite"
+database_dsn: "easybotce.db"
+# Other drivers require an explicit DSN (prefer the environment for secrets):
+# EASYBOTCE_DATABASE_DRIVER=mysql
+# EASYBOTCE_DATABASE_DSN=user:password@tcp(127.0.0.1:3306)/easybotce?parseTime=true
+# EASYBOTCE_DATABASE_DRIVER=postgres
+# EASYBOTCE_DATABASE_DSN=postgres://user:password@127.0.0.1:5432/easybotce?sslmode=require
