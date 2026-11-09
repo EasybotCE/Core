@@ -107,14 +107,22 @@ MySQL 连接格式为 `mysql://user:password@host:3306/database`；PostgreSQL �
 
 管理台和持久化 API 已覆盖适配器、服务器、玩家、账号、群组、允许与拒绝名单、命令定义、AI 服务配置、图片模板目录、JavaScript 插件目录和实例设置。配置数据通过统一记录表保存，启动时执行带版本的数据库迁移；存在配置入口不代表相应运行时已经实现。
 
-OneBot 11 是当前唯一可运行的适配器，使用正向 WebSocket，支持 Bearer 认证、身份握手、群聊及私聊事件归一化、消息发送和群列表调用、生命周期控制、状态及能力查询、有限退避重连。程序启动时恢复已启用的配置，API 不返回适配器凭据，编辑时留空会保留已保存的令牌。不支持的平台类型会被拒绝，避免保存成可运行配置。
+OneBot 11 和 QQ 官方 Bot 是当前可运行的适配器。OneBot 11 使用正向 WebSocket；QQ Bot 使用官方 Gateway，按 `AppID`/`AppSecret` 获取 `QQBot` token，并通过官方 OpenAPI 发送群/C2C 消息和读取频道列表。两者都支持身份握手、事件归一化、生命周期控制、状态及能力查询和有限退避重连。程序启动时恢复已启用的配置，API 不返回适配器凭据，编辑时留空会保留已保存的令牌。不支持的平台类型会被拒绝，避免保存成可运行配置。
+
+QQ Bot 配置示例：
+
+```json
+{"AppID":"你的机器人 AppID","AppSecret":"你的机器人 AppSecret","Intents":335546371}
+```
+
+`APIBase`、`GatewayURL` 和 `TokenURL` 仅用于沙箱或协议模拟测试，默认分别使用 QQ 官方 OpenAPI、Gateway 和 token 地址。QQ 官方 Gateway/WebSocket 链路存在逐步下线及 Webhook 灰度安排，生产使用前应以开放平台当前控制台能力为准；本实现暂不声称支持官方 Webhook 回调。
 
 运行日志保留有界内存缓冲，并通过有界异步队列写入 `runtime_logs`。`/api/logs` 支持日志级别、组件、UTC 时间范围、关键词和分页筛选；`/api/logs/status` 提供保留策略和写入失败计数。日志页面可设置持久化开关、保留天数和最大条数，每小时清理一次。日志会遮蔽常见令牌、密码、数据库连接地址及验证码，默认不记录消息正文。
 
 以下能力仍待完成或验证：
 
-- **真实环境验证**：OneBot 11 已通过协议模拟器的认证、握手、事件接收、发送和重连测试；真实账号及平台限流行为尚未验证。
-- **尚未实现**：Milky、Telegram、OpenQQ 适配器运行时，Minecraft 桥接及配套插件，消息转发和账号绑定，JavaScript 插件执行、AI 对话、浏览器图片渲染、模板市场、PlaceholderAPI 与统计求值、平台安装器及 Docker 打包。
+- **真实环境验证**：OneBot 11 和 QQ Bot 已通过本地协议/API 模拟测试；真实账号、QQ 官方限流、权限和 Gateway 长连接稳定性尚未验证。
+- **尚未实现**：QQ 官方 Webhook 回调、Milky、Telegram、OpenQQ 适配器运行时，Minecraft 桥接及配套插件，消息转发和账号绑定，JavaScript 插件执行、AI 对话、浏览器图片渲染、模板市场、PlaceholderAPI 与统计求值、平台安装器及 Docker 打包。
 - **参考边界**：原版 NativeAOT 可执行文件无法通过现有反编译资料可靠重建，独立的 EasyBot-Recovered 仓库仅作为管理 API、模块名称和行为的对照依据。
 
 ## 测试与协作

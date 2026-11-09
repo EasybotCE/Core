@@ -19,13 +19,21 @@ type Manager struct {
 	cancel   context.CancelFunc
 	onEvent  func(string, Event)
 	mu       sync.RWMutex
-	items    map[string]*Runtime
+	items    map[string]runtimeAdapter
 	failures map[string]Status
 }
 
 func NewManager(parent context.Context, db *store.Store, onEvent func(string, Event)) *Manager {
 	ctx, cancel := context.WithCancel(parent)
-	return &Manager{store: db, ctx: ctx, cancel: cancel, onEvent: onEvent, items: make(map[string]*Runtime), failures: make(map[string]Status)}
+	return &Manager{store: db, ctx: ctx, cancel: cancel, onEvent: onEvent, items: make(map[string]runtimeAdapter), failures: make(map[string]Status)}
+}
+
+type runtimeAdapter interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+	Status() Status
+	Send(context.Context, string, string, string) (string, error)
+	Groups(context.Context) ([]map[string]any, error)
 }
 
 func (m *Manager) StartEnabled(ctx context.Context) error {
@@ -43,7 +51,7 @@ func (m *Manager) StartEnabled(ctx context.Context) error {
 			}
 			continue
 		}
-		if adapterType != "Onebot11" || !item.Enabled {
+		if (adapterType != "Onebot11" && adapterType != "QQBot") || !item.Enabled {
 			continue
 		}
 		if err := m.Start(ctx, item.ID); err != nil {
@@ -54,15 +62,26 @@ func (m *Manager) StartEnabled(ctx context.Context) error {
 }
 
 func (m *Manager) Test(ctx context.Context, id string) (map[string]any, error) {
-	_, config, err := m.loadConfig(ctx, id)
+	adapterType, raw, err := m.loadRawConfig(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if adapterType == "QQBot" {
+		config, parseErr := ParseQQConfig(raw)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		return TestQQConnection(ctx, config)
+	}
+	config, parseErr := ParseConfig(raw)
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	return TestConnection(ctx, config)
 }
 
 func (m *Manager) Start(ctx context.Context, id string) error {
-	item, config, err := m.loadConfig(ctx, id)
+	item, adapterType, raw, err := m.loadRawRecord(ctx, id)
 	if err != nil {
 		m.mu.Lock()
 		m.failures[id] = Status{State: StateFailed, LastError: safeMessage(err), LastErrorCode: errorCode(err)}
@@ -72,6 +91,28 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	if !item.Enabled {
 		return fmt.Errorf("adapter is disabled")
 	}
+	var runtime runtimeAdapter
+	if adapterType == "QQBot" {
+		config, parseErr := ParseQQConfig(raw)
+		if parseErr != nil {
+			return parseErr
+		}
+		runtime = NewQQRuntime(id, config, func(event Event) {
+			if m.onEvent != nil {
+				m.onEvent(id, event)
+			}
+		})
+	} else {
+		config, parseErr := ParseConfig(raw)
+		if parseErr != nil {
+			return parseErr
+		}
+		runtime = NewRuntime(id, config, func(event Event) {
+			if m.onEvent != nil {
+				m.onEvent(id, event)
+			}
+		})
+	}
 	m.mu.Lock()
 	if existing := m.items[id]; existing != nil {
 		state := existing.Status().State
@@ -80,11 +121,6 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 			return nil
 		}
 	}
-	runtime := NewRuntime(id, config, func(event Event) {
-		if m.onEvent != nil {
-			m.onEvent(id, event)
-		}
-	})
 	m.items[id] = runtime
 	delete(m.failures, id)
 	m.mu.Unlock()
@@ -124,8 +160,12 @@ func (m *Manager) Status(id string) (Status, error) {
 }
 
 func (m *Manager) Capabilities(ctx context.Context, id string) ([]string, error) {
-	if _, _, err := m.loadConfig(ctx, id); err != nil {
+	adapterType, _, err := m.loadRawConfig(ctx, id)
+	if err != nil {
 		return nil, err
+	}
+	if adapterType == "QQBot" {
+		return []string{"group_message_receive", "private_message_receive", "group_message_send", "private_message_send", "group_list", "heartbeat"}, nil
 	}
 	return append([]string(nil), Capabilities...), nil
 }
@@ -149,7 +189,7 @@ func (m *Manager) Groups(ctx context.Context, id string) ([]map[string]any, erro
 func (m *Manager) Shutdown(ctx context.Context) {
 	m.cancel()
 	m.mu.RLock()
-	runtimes := make([]*Runtime, 0, len(m.items))
+	runtimes := make([]runtimeAdapter, 0, len(m.items))
 	for _, runtime := range m.items {
 		runtimes = append(runtimes, runtime)
 	}
@@ -165,26 +205,42 @@ func (m *Manager) RuntimeCount() int {
 	return len(m.items)
 }
 
-func (m *Manager) get(id string) *Runtime {
+func (m *Manager) get(id string) runtimeAdapter {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.items[id]
 }
 
 func (m *Manager) loadConfig(ctx context.Context, id string) (store.Record, Config, error) {
-	item, err := m.getRecord(ctx, id)
-	if err != nil {
-		return store.Record{}, Config{}, err
-	}
-	adapterType, raw, err := parseRecord(item)
+	item, adapterType, raw, err := m.loadRawRecord(ctx, id)
 	if err != nil {
 		return store.Record{}, Config{}, err
 	}
 	if adapterType != "Onebot11" {
-		return store.Record{}, Config{}, &APIError{Code: "adapter_type_unsupported", Message: "当前运行时仅支持 OneBot 11", Retryable: false}
+		return store.Record{}, Config{}, &APIError{Code: "adapter_type_unsupported", Message: "该适配器不是 OneBot 11", Retryable: false}
 	}
 	config, err := ParseConfig(raw)
 	return item, config, err
+}
+
+func (m *Manager) loadRawConfig(ctx context.Context, id string) (string, json.RawMessage, error) {
+	_, adapterType, raw, err := m.loadRawRecord(ctx, id)
+	return adapterType, raw, err
+}
+
+func (m *Manager) loadRawRecord(ctx context.Context, id string) (store.Record, string, json.RawMessage, error) {
+	item, err := m.getRecord(ctx, id)
+	if err != nil {
+		return store.Record{}, "", nil, err
+	}
+	adapterType, raw, err := parseRecord(item)
+	if err != nil {
+		return store.Record{}, "", nil, err
+	}
+	if adapterType != "Onebot11" && adapterType != "QQBot" {
+		return store.Record{}, "", nil, &APIError{Code: "adapter_type_unsupported", Message: "当前运行时不支持该适配器", Retryable: false}
+	}
+	return item, adapterType, raw, nil
 }
 
 func (m *Manager) getRecord(ctx context.Context, id string) (store.Record, error) {
