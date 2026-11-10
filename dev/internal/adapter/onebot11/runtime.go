@@ -378,7 +378,7 @@ func (r *Runtime) readLoop(conn *websocket.Conn, result chan<- error) {
 			pending := r.pending[echo]
 			r.mu.RUnlock()
 			if pending != nil {
-				if fmt.Sprint(packet["status"]) == "failed" {
+				if isFailedAPIResponse(packet) {
 					pending <- response{err: classifyAPIResponse(packet)}
 				} else {
 					pending <- response{packet: packet}
@@ -525,6 +525,14 @@ func classifyAPIResponse(packet map[string]any) error {
 	default:
 		return &APIError{Code: "adapter_api_failed", Message: logruntime.Redact(message), Retryable: false}
 	}
+}
+
+func isFailedAPIResponse(packet map[string]any) bool {
+	if fmt.Sprint(packet["status"]) == "failed" {
+		return true
+	}
+	retcode, ok := packet["retcode"].(float64)
+	return ok && retcode != 0
 }
 
 func safeMessage(err error) string {

@@ -32,6 +32,44 @@ func TestOneBotAPIErrorClassification(t *testing.T) {
 	}
 }
 
+func TestRuntimeTreatsNonzeroRetcodeAsFailedAPIResponse(t *testing.T) {
+	server := newOneBotMock(t, func(conn *websocket.Conn) {
+		for {
+			var request map[string]any
+			if conn.ReadJSON(&request) != nil {
+				return
+			}
+			response := map[string]any{"status": "ok", "retcode": 100, "echo": request["echo"], "message": "operation failed"}
+			if request["action"] == "get_login_info" {
+				response["retcode"] = 0
+				response["data"] = map[string]any{"user_id": 7}
+			}
+			if conn.WriteJSON(response) != nil {
+				return
+			}
+		}
+	})
+	defer server.Close()
+	runtime := NewRuntime("adapter-retcode", Config{WsURL: "ws" + strings.TrimPrefix(server.URL, "http"), AccessToken: "mock-token", HeartBeatInterval: 6000}, nil)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := waitForStatus(ctx, runtime, StateConnected); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runtime.Send(ctx, "group", "99", "outbound")
+	if errorCode(err) != "adapter_api_failed" {
+		t.Fatalf("expected nonzero retcode to fail the API call, got %v", err)
+	}
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	if err := runtime.Stop(stopCtx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTestConnectionReceivesIdentityAndUsesBearerToken(t *testing.T) {
 	var auth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
