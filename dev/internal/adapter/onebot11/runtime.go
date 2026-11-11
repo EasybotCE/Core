@@ -80,7 +80,7 @@ var Capabilities = []string{"group_message_receive", "private_message_receive", 
 func ParseConfig(raw json.RawMessage) (Config, error) {
 	config := Config{}
 	if len(raw) == 0 || string(raw) == "null" || string(raw) == "{}" {
-		return Config{WsURL: "ws://localhost:3001/", HeartBeatInterval: 6000}, nil
+		return Config{WsURL: "ws://localhost:3001/", UseHeartBeat: true, HeartBeatInterval: 15000}, nil
 	}
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return Config{}, &APIError{Code: "adapter_config_invalid", Message: "OneBot 11 配置不是有效 JSON", Retryable: false}
@@ -93,12 +93,17 @@ func ParseConfig(raw json.RawMessage) (Config, error) {
 		if config.AccessToken == "" {
 			_ = json.Unmarshal(aliases["accessToken"], &config.AccessToken)
 		}
+		if _, present := aliases["UseHeartBeat"]; !present {
+			if _, present = aliases["useHeartBeat"]; !present {
+				config.UseHeartBeat = true
+			}
+		}
 	}
 	if config.WsURL == "" {
 		config.WsURL = "ws://localhost:3001/"
 	}
 	if config.HeartBeatInterval == 0 {
-		config.HeartBeatInterval = 6000
+		config.HeartBeatInterval = 15000
 	}
 	if err := config.Validate(); err != nil {
 		return Config{}, err
@@ -125,16 +130,17 @@ type Runtime struct {
 	config  Config
 	onEvent func(Event)
 
-	mu       sync.RWMutex
-	status   Status
-	conn     *websocket.Conn
-	writeMu  sync.Mutex
-	pending  map[string]chan response
-	ctx      context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
-	started  bool
-	sequence atomic.Uint64
+	mu                sync.RWMutex
+	status            Status
+	conn              *websocket.Conn
+	writeMu           sync.Mutex
+	pending           map[string]chan response
+	ctx               context.Context
+	cancel            context.CancelFunc
+	done              chan struct{}
+	started           bool
+	sequence          atomic.Uint64
+	heartbeatInterval atomic.Int64
 }
 
 type response struct {
@@ -143,7 +149,12 @@ type response struct {
 }
 
 func NewRuntime(id string, config Config, onEvent func(Event)) *Runtime {
-	return &Runtime{id: id, config: config, onEvent: onEvent, status: Status{State: StateStopped}, pending: make(map[string]chan response)}
+	if config.HeartBeatInterval == 0 {
+		config.HeartBeatInterval = 15000
+	}
+	runtime := &Runtime{id: id, config: config, onEvent: onEvent, status: Status{State: StateStopped}, pending: make(map[string]chan response)}
+	runtime.heartbeatInterval.Store(int64(config.HeartBeatInterval))
+	return runtime
 }
 
 func TestConnection(ctx context.Context, config Config) (map[string]any, error) {
@@ -354,12 +365,12 @@ func (r *Runtime) run() {
 func (r *Runtime) readLoop(conn *websocket.Conn, result chan<- error) {
 	if r.config.UseHeartBeat {
 		conn.SetPongHandler(func(string) error {
-			return conn.SetReadDeadline(time.Now().Add(time.Duration(r.config.HeartBeatInterval+5000) * time.Millisecond))
+			return conn.SetReadDeadline(r.heartbeatDeadline())
 		})
 	}
 	for {
 		if r.config.UseHeartBeat {
-			_ = conn.SetReadDeadline(time.Now().Add(time.Duration(r.config.HeartBeatInterval+5000) * time.Millisecond))
+			_ = conn.SetReadDeadline(r.heartbeatDeadline())
 		}
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -391,6 +402,11 @@ func (r *Runtime) readLoop(conn *websocket.Conn, result chan<- error) {
 }
 
 func (r *Runtime) handleEvent(raw []byte, packet map[string]any) {
+	if r.config.UseHeartBeat && dataString(packet, "meta_event_type") == "heartbeat" {
+		if interval, ok := packet["interval"].(float64); ok && interval >= 1000 && interval <= 300000 {
+			r.heartbeatInterval.Store(int64(interval))
+		}
+	}
 	r.mu.Lock()
 	now := time.Now().UTC()
 	r.status.Received++
@@ -426,6 +442,14 @@ func (r *Runtime) handleEvent(raw []byte, packet map[string]any) {
 	if r.onEvent != nil {
 		r.onEvent(event)
 	}
+}
+
+func (r *Runtime) heartbeatDeadline() time.Time {
+	interval := r.heartbeatInterval.Load()
+	if interval < 1000 {
+		interval = 15000
+	}
+	return time.Now().Add(time.Duration(interval+5000) * time.Millisecond)
 }
 
 func firstString(data map[string]any, keys ...string) string {

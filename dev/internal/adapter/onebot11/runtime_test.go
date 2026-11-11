@@ -23,6 +23,31 @@ func TestConfigValidationAndLegacyFields(t *testing.T) {
 	}
 }
 
+func TestConfigDefaultsHeartbeatEnabledAndUsesOneBotFallbackInterval(t *testing.T) {
+	config, err := ParseConfig(json.RawMessage(`{"url":"ws://127.0.0.1:3001/"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.UseHeartBeat || config.HeartBeatInterval != 15000 {
+		t.Fatalf("expected heartbeat defaults, got %#v", config)
+	}
+	config, err = ParseConfig(json.RawMessage(`{"url":"ws://127.0.0.1:3001/","useHeartBeat":false}`))
+	if err != nil || config.UseHeartBeat {
+		t.Fatalf("explicit heartbeat disable was not preserved: %#v, %v", config, err)
+	}
+}
+
+func TestHeartbeatEventUpdatesDetectedInterval(t *testing.T) {
+	runtime := NewRuntime("adapter-heartbeat", Config{UseHeartBeat: true, HeartBeatInterval: 15000}, nil)
+	runtime.handleEvent([]byte(`{"meta_event_type":"heartbeat","interval":30000}`), map[string]any{
+		"meta_event_type": "heartbeat",
+		"interval":        float64(30000),
+	})
+	if got := runtime.heartbeatInterval.Load(); got != 30000 {
+		t.Fatalf("expected detected heartbeat interval, got %d", got)
+	}
+}
+
 func TestOneBotAPIErrorClassification(t *testing.T) {
 	if err := classifyAPIResponse(map[string]any{"retcode": float64(1403), "message": "credential rejected"}); errorCode(err) != "adapter_auth_failed" {
 		t.Fatalf("expected auth failure, got %v", err)
