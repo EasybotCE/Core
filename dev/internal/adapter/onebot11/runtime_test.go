@@ -23,12 +23,75 @@ func TestConfigValidationAndLegacyFields(t *testing.T) {
 	}
 }
 
+func TestConfigDefaultsHeartbeatEnabledAndUsesOneBotFallbackInterval(t *testing.T) {
+	config, err := ParseConfig(json.RawMessage(`{"url":"ws://127.0.0.1:3001/"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.UseHeartBeat || config.HeartBeatInterval != 15000 {
+		t.Fatalf("expected heartbeat defaults, got %#v", config)
+	}
+	config, err = ParseConfig(json.RawMessage(`{"url":"ws://127.0.0.1:3001/","useHeartBeat":false}`))
+	if err != nil || config.UseHeartBeat {
+		t.Fatalf("explicit heartbeat disable was not preserved: %#v, %v", config, err)
+	}
+}
+
+func TestHeartbeatEventUpdatesDetectedInterval(t *testing.T) {
+	runtime := NewRuntime("adapter-heartbeat", Config{UseHeartBeat: true, HeartBeatInterval: 15000}, nil)
+	runtime.handleEvent([]byte(`{"meta_event_type":"heartbeat","interval":30000}`), map[string]any{
+		"meta_event_type": "heartbeat",
+		"interval":        float64(30000),
+	})
+	if got := runtime.heartbeatInterval.Load(); got != 30000 {
+		t.Fatalf("expected detected heartbeat interval, got %d", got)
+	}
+}
+
 func TestOneBotAPIErrorClassification(t *testing.T) {
 	if err := classifyAPIResponse(map[string]any{"retcode": float64(1403), "message": "credential rejected"}); errorCode(err) != "adapter_auth_failed" {
 		t.Fatalf("expected auth failure, got %v", err)
 	}
 	if err := classifyAPIResponse(map[string]any{"retcode": float64(429), "message": "too many requests"}); errorCode(err) != "adapter_rate_limited" {
 		t.Fatalf("expected rate limit, got %v", err)
+	}
+}
+
+func TestRuntimeTreatsNonzeroRetcodeAsFailedAPIResponse(t *testing.T) {
+	server := newOneBotMock(t, func(conn *websocket.Conn) {
+		for {
+			var request map[string]any
+			if conn.ReadJSON(&request) != nil {
+				return
+			}
+			response := map[string]any{"status": "ok", "retcode": 100, "echo": request["echo"], "message": "operation failed"}
+			if request["action"] == "get_login_info" {
+				response["retcode"] = 0
+				response["data"] = map[string]any{"user_id": 7}
+			}
+			if conn.WriteJSON(response) != nil {
+				return
+			}
+		}
+	})
+	defer server.Close()
+	runtime := NewRuntime("adapter-retcode", Config{WsURL: "ws" + strings.TrimPrefix(server.URL, "http"), AccessToken: "mock-token", HeartBeatInterval: 6000}, nil)
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := waitForStatus(ctx, runtime, StateConnected); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runtime.Send(ctx, "group", "99", "outbound")
+	if errorCode(err) != "adapter_api_failed" {
+		t.Fatalf("expected nonzero retcode to fail the API call, got %v", err)
+	}
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	if err := runtime.Stop(stopCtx); err != nil {
+		t.Fatal(err)
 	}
 }
 
