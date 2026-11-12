@@ -69,6 +69,14 @@ func TestRecordCRUDAndSession(t *testing.T) {
 	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `Onebot11`) {
 		t.Fatalf("adapter create returned %d: %s", response.Code, response.Body.String())
 	}
+	request = httptest.NewRequest(http.MethodPost, "/api/adapter/create", strings.NewReader(`{"adapterType":"QQBot","displayName":"QQ Official","configJson":"{\"AppID\":\"app\",\"AppSecret\":\"secret\"}"}`))
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `QQBot`) || strings.Contains(response.Body.String(), `secret`) {
+		t.Fatalf("QQ adapter create returned %d: %s", response.Code, response.Body.String())
+	}
 	request = httptest.NewRequest(http.MethodPost, "/api/adapter/create", strings.NewReader(`{"adapterType":"Telegram","displayName":"unsupported","configJson":"{}"}`))
 	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
 	request.Header.Set("Content-Type", "application/json")

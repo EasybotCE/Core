@@ -136,7 +136,7 @@ func run() (code int) {
 		logger.Info(fmt.Sprintf("[AdapterManager] 发现 %d 个适配器配置", len(adapterConfigs)))
 	}
 	adapters := onebot11.NewManager(ctx, db, func(id string, event onebot11.Event) {
-		logs.Add("info", "adapter.onebot11", "OneBot event received: "+event.Type+" (adapter "+id+")")
+		logs.Add("info", "adapter", "Adapter event received: "+event.Type+" (adapter "+id+")")
 	})
 	if err := adapters.StartEnabled(ctx); err != nil {
 		logger.Error("[AdapterManager] 适配器初始化失败", "error", err)
@@ -152,7 +152,7 @@ func run() (code int) {
 			} else if state.State == onebot11.StateFailed {
 				logger.Warn(fmt.Sprintf("[AdapterManager] 适配器 %q 加载失败: %s", item.Name, runtime.Redact(state.LastError)))
 			} else if state.State == onebot11.StateStopped {
-				logger.Warn(fmt.Sprintf("[AdapterManager] 适配器 %q 未加载，当前仅支持 OneBot 11", item.Name))
+				logger.Warn(fmt.Sprintf("[AdapterManager] 适配器 %q 未加载，当前支持的适配器运行时均未建立连接", item.Name))
 			} else {
 				logger.Info(fmt.Sprintf("[AdapterManager] 已加载适配器 %q，连接状态以运行时结果为准", item.Name))
 			}

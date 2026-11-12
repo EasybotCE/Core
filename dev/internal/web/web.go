@@ -359,6 +359,7 @@ func (s *server) deleteRecord(w http.ResponseWriter, r *http.Request) {
 func (s *server) adapterTypes(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, []map[string]string{
 		{"adapterType": "Onebot11", "displayName": "OneBot 11", "platformName": "onebot11"},
+		{"adapterType": "QQBot", "displayName": "QQ 官方 Bot", "platformName": "qqbot"},
 	})
 }
 
@@ -383,8 +384,8 @@ func (s *server) createAdapter(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.AdapterType != "Onebot11" {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"message": "当前主程序仅支持 OneBot 11 适配器"})
+	if body.AdapterType != "Onebot11" && body.AdapterType != "QQBot" {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"message": "当前主程序不支持该适配器"})
 		return
 	}
 	if body.DisplayName == "" {
@@ -403,6 +404,9 @@ func (s *server) createAdapter(w http.ResponseWriter, r *http.Request) {
 			writeAdapterError(w, err)
 			return
 		}
+	} else if _, err := onebot11.ParseQQConfig(config); err != nil {
+		writeAdapterError(w, err)
+		return
 	}
 	detail, _ := json.Marshal(map[string]any{"adapterType": body.AdapterType, "config": config})
 	item, err := s.store.Save(r.Context(), store.Record{Kind: "adapters", Name: body.DisplayName, Detail: string(detail), Enabled: true})
@@ -440,8 +444,16 @@ func (s *server) updateAdapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	config = preserveAccessToken(oldDetail.Config, config)
+	if oldDetail.AdapterType == "QQBot" {
+		config = preserveSecret(oldDetail.Config, config, "AppSecret", "appSecretConfigured")
+	}
 	if oldDetail.AdapterType == "Onebot11" {
 		if _, err := onebot11.ParseConfig(config); err != nil {
+			writeAdapterError(w, err)
+			return
+		}
+	} else if oldDetail.AdapterType == "QQBot" {
+		if _, err := onebot11.ParseQQConfig(config); err != nil {
 			writeAdapterError(w, err)
 			return
 		}
@@ -614,46 +626,57 @@ func publicAdapterRecord(item store.Record) store.Record {
 		item.Detail = string(publicDetail)
 		return item
 	}
-	var token string
-	_ = json.Unmarshal(config["AccessToken"], &token)
-	if token == "" {
-		_ = json.Unmarshal(config["accessToken"], &token)
-	}
-	if token != "" {
-		config["AccessToken"] = json.RawMessage(`""`)
-		delete(config, "accessToken")
-		config["accessTokenConfigured"] = json.RawMessage(`true`)
-	}
+	redactSecret(config, "AccessToken", "accessTokenConfigured")
+	redactSecret(config, "AppSecret", "appSecretConfigured")
 	publicConfig, _ := json.Marshal(config)
 	publicDetail, _ := json.Marshal(map[string]any{"adapterType": detail.AdapterType, "config": json.RawMessage(publicConfig)})
 	item.Detail = string(publicDetail)
 	return item
 }
 
+func redactSecret(config map[string]json.RawMessage, canonical, configured string) {
+	legacy := strings.ToLower(canonical[:1]) + canonical[1:]
+	var secret string
+	_ = json.Unmarshal(config[canonical], &secret)
+	if secret == "" {
+		_ = json.Unmarshal(config[legacy], &secret)
+	}
+	if secret != "" {
+		config[canonical] = json.RawMessage(`""`)
+		delete(config, legacy)
+		config[configured] = json.RawMessage(`true`)
+	}
+}
+
 func preserveAccessToken(oldConfig, newConfig json.RawMessage) json.RawMessage {
+	return preserveSecret(oldConfig, newConfig, "AccessToken", "accessTokenConfigured")
+}
+
+func preserveSecret(oldConfig, newConfig json.RawMessage, canonical, configuredKey string) json.RawMessage {
 	var oldValues, newValues map[string]json.RawMessage
 	if json.Unmarshal(oldConfig, &oldValues) != nil || json.Unmarshal(newConfig, &newValues) != nil {
 		return newConfig
 	}
+	legacy := strings.ToLower(canonical[:1]) + canonical[1:]
 	var oldToken, newToken string
-	_ = json.Unmarshal(oldValues["AccessToken"], &oldToken)
+	_ = json.Unmarshal(oldValues[canonical], &oldToken)
 	if oldToken == "" {
-		_ = json.Unmarshal(oldValues["accessToken"], &oldToken)
+		_ = json.Unmarshal(oldValues[legacy], &oldToken)
 	}
-	_ = json.Unmarshal(newValues["AccessToken"], &newToken)
+	_ = json.Unmarshal(newValues[canonical], &newToken)
 	if newToken == "" {
-		_ = json.Unmarshal(newValues["accessToken"], &newToken)
+		_ = json.Unmarshal(newValues[legacy], &newToken)
 	}
 	var configured bool
-	_ = json.Unmarshal(newValues["accessTokenConfigured"], &configured)
+	_ = json.Unmarshal(newValues[configuredKey], &configured)
 	if oldToken != "" && (newToken == "" || newToken == "********" || configured) {
-		newValues["AccessToken"] = oldValues["AccessToken"]
-		if len(newValues["AccessToken"]) == 0 {
-			newValues["AccessToken"] = oldValues["accessToken"]
+		newValues[canonical] = oldValues[canonical]
+		if len(newValues[canonical]) == 0 {
+			newValues[canonical] = oldValues[legacy]
 		}
-		delete(newValues, "accessToken")
+		delete(newValues, legacy)
 	}
-	delete(newValues, "accessTokenConfigured")
+	delete(newValues, configuredKey)
 	result, err := json.Marshal(newValues)
 	if err != nil {
 		return newConfig
