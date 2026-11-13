@@ -28,3 +28,6 @@ token.txt
 *.db-shm
 *.db-wal
 *.log
+
+# CodeBuddy 
+.codebuddy/

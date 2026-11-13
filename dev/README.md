@@ -117,12 +117,15 @@ QQ Bot 配置示例：
 
 `APIBase`、`GatewayURL` 和 `TokenURL` 仅用于沙箱或协议模拟测试，默认分别使用 QQ 官方 OpenAPI、Gateway 和 token 地址。QQ 官方 Gateway/WebSocket 链路存在逐步下线及 Webhook 灰度安排，生产使用前应以开放平台当前控制台能力为准；本实现暂不声称支持官方 Webhook 回调。
 
+Minecraft 侧提供与原版插件一致的桥接服务端 `/bridge`：JSON over WebSocket，遵循 `Hello`/`Identify`/`HeartBeat`/`Packet`/`CallBack` 与整数 `op`、snake_case 字段。插件使用服务器记录 `detail.token` 鉴权，令牌在创建记录时自动生成，可通过 `POST /api/servers/{id}/token` 轮换。连接状态取自实际会话并通过 `/api/bridge/status` 暴露；`SYNC_MESSAGE` 聊天按 `sync-rules` 规则转发到 OneBot 11 群，群消息通过 `SEND_TO_CHAT` 推回服务器，双向规则带 5 秒回显抑制。适配器、服务器和同步规则在管理台以表单编辑，其余尚无运行时语义的配置类型保留 JSON 输入。
+
 运行日志保留有界内存缓冲，并通过有界异步队列写入 `runtime_logs`。`/api/logs` 支持日志级别、组件、UTC 时间范围、关键词和分页筛选；`/api/logs/status` 提供保留策略和写入失败计数。日志页面可设置持久化开关、保留天数和最大条数，每小时清理一次。日志会遮蔽常见令牌、密码、数据库连接地址及验证码，默认不记录消息正文。
 
 以下能力仍待完成或验证：
 
 - **真实环境验证**：OneBot 11 和 QQ Bot 已通过本地协议/API 模拟测试；真实账号、QQ 官方限流、权限和 Gateway 长连接稳定性尚未验证。
-- **尚未实现**：QQ 官方 Webhook 回调、Milky、Telegram、OpenQQ 适配器运行时，Minecraft 桥接及配套插件，消息转发和账号绑定，JavaScript 插件执行、AI 对话、浏览器图片渲染、模板市场、PlaceholderAPI 与统计求值、平台安装器及 Docker 打包。
+- **尚未实现**：QQ 官方 Webhook 回调、Milky、Telegram、OpenQQ 适配器运行时，Minecraft 插件本体、账号绑定、命令执行、JavaScript 插件执行、AI 对话、浏览器图片渲染、模板市场、PlaceholderAPI 与统计求值、平台安装器及 Docker 打包。
+- **桥接验证范围**：`/bridge` 仅通过本地模拟插件验证过握手、事件上报和消息下发，尚未用发布的 EasyBot 插件包实测；绑定、命令与 PAPI 类报文只回执不实现。
 - **参考边界**：原版 NativeAOT 可执行文件无法通过现有反编译资料可靠重建，独立的 EasyBot-Recovered 仓库仅作为管理 API、模块名称和行为的对照依据。
 
 ## 测试与协作
