@@ -149,7 +149,7 @@ func run() (code int) {
 	})
 	bridges := bridge.NewManager(db, logger, bridge.Callbacks{
 		OnChat: func(serverID string, packet bridge.SyncMessagePacket) {
-			logs.Add("info", "bridge", "Minecraft chat from "+packet.Player.PlayerName+": "+packet.Message)
+			logs.Add("info", "bridge", "Minecraft chat received from "+packet.Player.PlayerName+" (server "+serverID+")")
 			if eventRouter != nil {
 				eventRouter.OnMinecraftChat(serverID, packet)
 			}

@@ -287,3 +287,61 @@ func TestPluginJoinIsAdmittedWithoutBinding(t *testing.T) {
 		t.Fatalf("expected op=CallBack, got %#v", callback)
 	}
 }
+
+func TestDisabledServerRejectsToken(t *testing.T) {
+	db, manager, _, _, serverID, _ := newTestStack(t)
+	record, err := db.Get(context.Background(), "servers", serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Enabled = false
+	if _, err := db.Save(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(manager)
+	defer server.Close()
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/bridge"
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.ReadJSON(&map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(map[string]any{"op": OpIdentify, "token": testToken, "plugin_version": "2.3.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("a disabled server must reject a valid token")
+	}
+}
+
+func TestDisconnectServerClosesSession(t *testing.T) {
+	_, manager, _, _, serverID, _ := newTestStack(t)
+	conn := dialPlugin(t, manager, testToken)
+	if !manager.Online(serverID) {
+		t.Fatal("expected the bridge session to be online")
+	}
+
+	manager.DisconnectServer(serverID)
+
+	deadline := time.Now().Add(2 * time.Second)
+	online := true
+	for time.Now().Before(deadline) {
+		if !manager.Online(serverID) {
+			online = false
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if online {
+		t.Fatal("expected the bridge session to be offline after DisconnectServer")
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("expected the plugin socket to be closed after DisconnectServer")
+	}
+}

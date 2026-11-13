@@ -242,6 +242,10 @@ func (m *Manager) authenticate(token string) (store.Record, string, error) {
 		return store.Record{}, "", err
 	}
 	for _, record := range records {
+		// A disabled server must not accept connections, even with a valid token.
+		if !record.Enabled {
+			continue
+		}
 		if ServerToken(record) == token {
 			return record, token, nil
 		}
@@ -389,6 +393,18 @@ func (m *Manager) RunCommand(ctx context.Context, serverID, playerName, command 
 // Online reports whether a server currently has an authenticated socket.
 func (m *Manager) Online(serverID string) bool {
 	return m.session(serverID) != nil
+}
+
+// DisconnectServer closes any live bridge session for the server and asks the
+// plugin to reconnect. It is used after a token rotation so the old, still
+// authenticated session cannot keep sending or receiving messages, and the
+// plugin must re-authenticate with the new token on its next connect.
+func (m *Manager) DisconnectServer(serverID string) {
+	s := m.session(serverID)
+	if s == nil {
+		return
+	}
+	m.closeWith(s, "令牌已轮换，请使用新令牌重新连接")
 }
 
 func (m *Manager) session(serverID string) *session {

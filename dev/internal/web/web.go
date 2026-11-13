@@ -726,7 +726,10 @@ func (s *server) rotateServerToken(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.logs.Add("warn", "bridge", "Minecraft server token rotated: "+record.Name)
+	if s.bridgeManager != nil {
+		s.bridgeManager.DisconnectServer(record.ID)
+	}
+	s.logs.Add("warn", "bridge", "Minecraft server token rotated, active session closed: "+record.Name)
 	writeJSON(w, http.StatusOK, map[string]string{"serverId": record.ID, "token": token})
 }
 
