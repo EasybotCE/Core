@@ -1,28 +1,27 @@
 # Local runtime data and secrets
-/dev/appdata/
-appsettings.json
-token.txt
+/appdata/
+config.json
 .env
 .env.*
 !.env.example
 
 # Go outputs
-/dev/bin/
-/dev/obj/
+/bin/
+/obj/
 /release/
 
 # Frontend outputs and local tooling state
-/dev/web/node_modules/
-/dev/web/dist/
-/dev/web/.vscode/
-/dev/web/.idea/
+/web/node_modules/
+/web/dist/
+/web/.vscode/
+/web/.idea/
 
 # Decompiled reference exports and bundled legacy releases
 /decompiled/
 /private-repo-export/
 /private-repo-export-windows/
 /easybot-dev-*/
-/dev/old/
+/old/
 *.zip
 *.db
 *.db-shm
@@ -31,3 +30,6 @@ token.txt
 
 # CodeBuddy 
 .codebuddy/
+
+/release
+/bin

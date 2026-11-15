@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ClaudeCodeTabState">
+    <option name="tabSessions">
+      <map>
+        <entry key="0">
+          <value>
+            <TabSessionState>
+              <option name="projectPath" value="D:\project\GO\EasybotCE" />
+              <option name="provider" value="codex" />
+              <option name="sessionId" value="01a1ddfe-f243-71f0-8161-ec9a764647bd" />
+              <option name="cwd" value="D:\project\GO\EasybotCE" />
+              <option name="model" value="gpt-6.1-sol" />
+              <option name="permissionMode" value="auto" />
+            </TabSessionState>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>

@@ -50,19 +50,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: dev/go.mod
-          cache-dependency-path: dev/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Test
-        working-directory: dev
         run: go test -vet=off ./...
       - name: Vet
-        working-directory: dev
         run: go vet ./...
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: dev/web/package-lock.json
+          cache-dependency-path: web/package-lock.json
       - name: 构建便携包
         run: node build.mjs
       - name: 上传便携包
@@ -100,10 +98,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: dev/go.mod
-          cache-dependency-path: dev/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Test against MySQL
-        working-directory: dev
         env:
           EASYBOT_TEST_DATABASE_DSN: mysql://easybot:easybot-test-password@127.0.0.1:3306/easybot_test
         # 其他包由跨平台任务覆盖；外部数据库测试每次连接新测试库执行。
@@ -129,10 +126,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: dev/go.mod
-          cache-dependency-path: dev/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Test against PostgreSQL
-        working-directory: dev
         env:
           EASYBOT_TEST_DATABASE_DSN: postgres://easybot:easybot-test-password@127.0.0.1:5432/easybot_test?sslmode=disable
         run: go test -count=1 -vet=off ./internal/store
