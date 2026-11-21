@@ -9,9 +9,6 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	s.registerAdapterRoutes(mux)
 	s.registerLogRoutes(mux)
 	s.registerBridgeRoutes(mux)
-	if s.bridgeManager != nil {
-		mux.Handle("/bridge", s.bridgeManager)
-	}
 	mux.Handle("/", http.FileServer(http.Dir(staticDirectory())))
 }
 

@@ -46,6 +46,20 @@ func (s *Store) WriteLog(ctx context.Context, entry runtime.LogEntry) error {
 	return err
 }
 
+func (s *Store) CountLogIDs(ctx context.Context, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, s.query("SELECT COUNT(*) FROM runtime_logs WHERE id IN ("+placeholders+")"), args...).Scan(&count)
+	return count, err
+}
+
 func (s *Store) ListLogs(ctx context.Context, filter LogFilter) ([]runtime.LogEntry, int, error) {
 	where := []string{"1=1"}
 	args := make([]any, 0, 6)

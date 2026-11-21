@@ -81,6 +81,12 @@ func run() (code int) {
 		return 1
 	}
 	defer listener.Close()
+	bridgeListener, err := net.Listen("tcp", settings.BridgeAddress)
+	if err != nil {
+		logger.Error("Bridge 监听失败", "address", settings.BridgeAddress, "error", err)
+		return 1
+	}
+	defer bridgeListener.Close()
 	admin, err := db.EnsureConfigAdmin(context.Background(), settings.Password)
 	if err != nil {
 		logger.Error("管理身份初始化失败", "error", err)
@@ -108,16 +114,7 @@ func run() (code int) {
 		defer cancel()
 		writer.Close(flushCtx)
 	}()
-	logs.New("daemon").Info("EasybotCE 正在初始化后台模块")
 	go maintainLogs(db, logs.New("logs"))
-	logger.Info("[StartupAdapterService] 已启用适配器掉线自动重连")
-	logger.Info("[AdapterManager] 正在初始化适配器管理器...")
-	adapterConfigs, listErr := db.List(ctx, "adapters")
-	if listErr != nil {
-		logger.Error("[AdapterManager] 读取适配器配置失败", "error", listErr)
-	} else {
-		logger.Info(fmt.Sprintf("[AdapterManager] 发现 %d 个适配器配置", len(adapterConfigs)))
-	}
 	var eventRouter *bridge.Router
 	adapters := onebot11.NewManager(ctx, db, func(id string, event onebot11.Event) {
 		logs.New("adapter").Info("适配器事件", "event", event.Type, "adapter", id)
@@ -157,42 +154,25 @@ func run() (code int) {
 	})
 	eventRouter = bridge.NewRouter(db, bridges, adapters, bridgeLogger)
 	if err := adapters.StartEnabled(ctx); err != nil {
-		logger.Error("[AdapterManager] 适配器初始化失败", "error", err)
-	} else {
-		for _, item := range adapterConfigs {
-			if !item.Enabled {
-				logger.Info(fmt.Sprintf("[AdapterManager] 适配器 %q 未启用，跳过加载", item.Name))
-				continue
-			}
-			state, err := adapters.Status(item.ID)
-			if err != nil {
-				logger.Warn(fmt.Sprintf("[AdapterManager] 适配器 %q 状态读取失败", item.Name), "error", err)
-			} else if state.State == onebot11.StateFailed {
-				logger.Warn(fmt.Sprintf("[AdapterManager] 适配器 %q 加载失败: %s", item.Name, runtime.Redact(state.LastError)))
-			} else if state.State == onebot11.StateStopped {
-				logger.Warn(fmt.Sprintf("[AdapterManager] 适配器 %q 未加载，当前支持的适配器运行时均未建立连接", item.Name))
-			} else {
-				logger.Info(fmt.Sprintf("[AdapterManager] 已加载适配器 %q，连接状态以运行时结果为准", item.Name))
-			}
-		}
-		logger.Info(fmt.Sprintf("[AdapterManager] 初始化完成，已加载 %d 个适配器实例", adapters.RuntimeCount()))
+		logger.Error("适配器初始化失败", "error", err)
+	} else if count := adapters.RuntimeCount(); count > 0 {
+		logger.Info(fmt.Sprintf("已初始化 %d 个适配器实例", count))
 	}
-	logger.Info("[桥接] WebSocket 接入已挂载至管理服务 /bridge")
-	logger.Info("[插件] 脚本执行模块尚未实现，跳过加载")
-	logger.Info("[图片模板] 浏览器渲染模块尚未实现，跳过加载")
-	logger.Info("[AI] 对话执行模块尚未实现，跳过加载")
-	logger.Info("[WebUI] 正在初始化管理服务...")
 	server := &http.Server{
 		Addr:              address,
 		Handler:           api.NewForListenerWithRuntimes(db, logs.New("api"), logs, adapters, bridges, listener.Addr().String(), settings.Password, admin.ID, writer),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	logger.Info("[WebUI] 管理路由初始化完成")
-	printStartup(logs.New("web"), address, listener.Addr().String(), cert != "", config.IsLoopbackListener(listener.Addr().String()), settings.Password, initialPassword)
+	bridgeMux := http.NewServeMux()
+	bridgeMux.Handle("/bridge", bridges)
+	bridgeServer := &http.Server{Addr: settings.BridgeAddress, Handler: bridgeMux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	logs.New("web").Info("管理路由初始化完成")
+	printStartup(logs.New("web"), listener.Addr().String(), cert != "", settings.Password, initialPassword)
+	logs.New("bridge").Info("监听地址: " + bridgeListener.Addr().String())
 	logger.Info(fmt.Sprintf("[启动] 初始化完成，耗时 %d ms", time.Since(started).Milliseconds()))
 	logger.Info("管理界面及后台服务初始化完成")
-	serveErr := make(chan error, 1)
+	serveErr := make(chan error, 2)
 	go func() {
 		if cert != "" {
 			serveErr <- server.ServeTLS(listener, cert, key)
@@ -200,18 +180,22 @@ func run() (code int) {
 		}
 		serveErr <- server.Serve(listener)
 	}()
+	go func() { serveErr <- bridgeServer.Serve(bridgeListener) }()
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		adapters.Shutdown(shutdownCtx)
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("服务关闭失败", "error", err)
+			logger.Error("管理服务关闭失败", "error", err)
+		}
+		if err := bridgeServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Bridge 服务关闭失败", "error", err)
 		}
 		logger.Info("守护进程服务已停止")
 	case err := <-serveErr:
 		if err != nil && err != http.ErrServerClosed {
-			logger.Error("管理服务已停止", "error", err)
+			logger.Error("服务已停止", "error", err)
 			return 1
 		}
 	}

@@ -18,7 +18,6 @@ import (
 type server struct {
 	loginPassword  string
 	loginUserID    string
-	localOnly      bool
 	store          *store.Store
 	logger         *slog.Logger
 	logs           *runtime.Logs
@@ -51,7 +50,6 @@ func NewForListener(db *store.Store, logger *slog.Logger, logs *runtime.Logs, ad
 
 func NewForListenerWithRuntimes(db *store.Store, logger *slog.Logger, logs *runtime.Logs, adapters *onebot11.Manager, bridges *bridge.Manager, address string, password string, userID string, writers ...*runtime.AsyncLogWriter) http.Handler {
 	s := &server{store: db, logger: logger, logs: logs, adapterManager: adapters, bridgeManager: bridges, loginAttempts: make(map[string]loginAttempt)}
-	s.localOnly = config.IsLoopbackListener(address)
 	s.loginPassword = password
 	s.loginUserID = userID
 	if len(writers) > 0 {

@@ -28,15 +28,15 @@ EasybotCE 的主程序，使用 Go 提供管理 API、Vue 3 提供网页管理�
 3. Windows 双击 `easybotce.exe`；Linux 在解压目录运行 `./easybotce`，缺少执行权限时先执行 `chmod +x easybotce`。
 4. 浏览器打开 `http://127.0.0.1:5001`，运行期间保持程序窗口或终端打开。
 
-默认仅监听本机回环地址，无需注册或登录。普通用户不需要安装 Go、Node.js、数据库服务器，也不需要额外启动前端服务。
+默认管理服务与 Bridge 均绑定全部网卡。浏览器访问管理台时必须输入配置中的管理密码；普通用户不需要安装 Go、Node.js、数据库服务器，也不需要额外启动前端服务。外网使用前请配置防火墙，并建议为管理服务启用 HTTPS。
 
 Windows 双击启动失败时会显示错误原因，按回车后关闭窗口；从已有终端或自动化任务启动时，程序直接返回错误码。
 
 ## 配置与登录
 
-程序在首次启动时于程序目录创建 `config.json`，并生成 12 位数字管理密码写入配置；该密码仅在首次启动控制台显示一次。修改配置后需重启。配置结构为 `server`、`bridge`、`database`、`auth` 和 `logging`，完整示例见 [config.example.json](internal/config/config.example.json)。`EASYBOT_CONFIG` 可指定配置文件，环境变量可覆盖对应设置。
+程序在首次启动时于程序目录创建 `config.json`，并生成 12 位数字管理密码写入配置；该密码仅在首次启动控制台显示一次。SQLite 数据库及其父目录（默认 `appdata/easybot.db`）也会在启动时自动创建。管理页面静态资源需由便携包提供，源码运行前需先构建前端；运行时不会生成空白页面文件。修改配置后需重启。配置结构为 `server`、`bridge`、`database`、`auth` 和 `logging`，完整示例见 [config.example.json](internal/config/config.example.json)。`EASYBOT_CONFIG` 可指定配置文件，环境变量可覆盖对应设置。
 
-默认仅监听本机，无需登录。改为非本机监听后使用配置中的 `auth.password` 登录；密码以明文保存在配置文件中，请限制文件访问权限。通过公网传输凭据时建议配置 HTTPS。旧版 .NET 格式配置不会被静默覆盖，需迁移到新结构。
+默认监听 `0.0.0.0:5001`，本机及外网访问均需使用 `auth.password` 登录；Bridge 默认独立监听 `0.0.0.0:26991`。密码以明文保存在配置文件中，请限制文件访问权限。外网访问前配置防火墙，仅开放必要端口；通过公网传输凭据时建议配置 HTTPS。旧版 .NET 格式配置不会被静默覆盖，需迁移到新结构。
 
 ## 升级与原版迁移
 

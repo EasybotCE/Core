@@ -11,6 +11,19 @@ import (
 	"testing"
 )
 
+func TestLoadFileCreatesMissingConfigDirectories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new", "install", "config.json")
+	settings, created, err := LoadFile(path)
+	if err != nil || !created {
+		t.Fatalf("load: created=%v err=%v", created, err)
+	}
+	if settings.Path != path {
+		t.Fatalf("config path = %q, want %q", settings.Path, path)
+	}
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		t.Fatalf("generated config is missing or invalid: info=%v err=%v", info, err)
+	}
+}
 func TestLoadFileSecuresExistingPortableTemplate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	template, err := os.ReadFile("config.example.json")

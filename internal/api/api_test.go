@@ -18,6 +18,26 @@ import (
 	"easybot/internal/store"
 )
 
+func TestUnauthorizedRequestsAreDebugLogged(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	logs := runtime.NewLogs(10, slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	handler := New(db, slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})), logs)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/adapter/list", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+	entries := logs.Recent(1)
+	if len(entries) != 1 || entries[0].Level != "debug" || entries[0].Source != "api" {
+		t.Fatalf("unauthorized request log = %#v, want api debug entry", entries)
+	}
+}
 func TestModuleLogsPersistDiagnosticContext(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
 	if err != nil {
@@ -250,7 +270,62 @@ func TestPasswordLoginAndSessionAuthorization(t *testing.T) {
 	}
 }
 
-func TestLocalListenerAuthenticationBoundary(t *testing.T) {
+func TestRecentLogTotalIncludesMemoryOnlyEntries(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createTestSession(t, db)
+	logs := runtime.NewLogs(20, nil)
+	logs.New("adapter").Info("内存中的连接状态")
+	handler := New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), logs)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/logs?limit=10", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var page struct {
+		Items []runtime.LogEntry `json:"items"`
+		Total int                `json:"total"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || len(page.Items) != 1 || page.Total != 1 {
+		t.Fatalf("memory log page has incorrect count: %d %s", response.Code, response.Body.String())
+	}
+}
+func TestLoginFailuresResetAfterSuccessfulAuthentication(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	admin, err := db.EnsureConfigAdmin(context.Background(), "correct-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewForListener(db, slog.New(slog.NewTextHandler(io.Discard, nil)), runtime.NewLogs(20, nil), nil, "0.0.0.0:5001", "correct-password", admin.ID)
+	login := func(password string) int {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"password":"`+password+`"}`))
+		request.RemoteAddr = "192.0.2.10:4321"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response.Code
+	}
+	for i := 0; i < 9; i++ {
+		if status := login("wrong-password"); status != http.StatusUnauthorized {
+			t.Fatalf("failed attempt %d returned %d", i+1, status)
+		}
+	}
+	if status := login("correct-password"); status != http.StatusOK {
+		t.Fatalf("valid password after failures returned %d", status)
+	}
+	if status := login("wrong-password"); status != http.StatusUnauthorized {
+		t.Fatalf("failed attempt after successful login returned %d; want 401", status)
+	}
+}
+func TestEveryListenerRequiresAuthentication(t *testing.T) {
 	db, err := store.Open(t.TempDir() + "/easybot.db")
 	if err != nil {
 		t.Fatal(err)
@@ -258,16 +333,9 @@ func TestLocalListenerAuthenticationBoundary(t *testing.T) {
 	defer db.Close()
 	for _, test := range []struct {
 		name, listener, remote, host, origin string
-		allowed                              bool
 	}{
-		{name: "IPv4", listener: "127.0.0.1:5001", remote: "127.0.0.1:1234", host: "127.0.0.1:5001", allowed: true},
-		{name: "IPv4 loopback range", listener: "127.0.0.2:5001", remote: "127.0.0.1:1234", host: "127.0.0.2:5001", allowed: true},
-		{name: "IPv6", listener: "[::1]:5001", remote: "[::1]:1234", host: "[::1]:5001", allowed: true},
-		{name: "localhost", listener: "localhost:5001", remote: "127.0.0.1:1234", host: "localhost:5001", allowed: true},
-		{name: "external listener still requires login", listener: "0.0.0.0:5001", remote: "127.0.0.1:1234", host: "127.0.0.1:5001"},
-		{name: "forged local host", listener: "127.0.0.1:5001", remote: "192.0.2.1:1234", host: "localhost:5001"},
-		{name: "public host", listener: "127.0.0.1:5001", remote: "127.0.0.1:1234", host: "evil.example:5001"},
-		{name: "public origin", listener: "127.0.0.1:5001", remote: "127.0.0.1:1234", host: "localhost:5001", origin: "https://evil.example"},
+		{name: "loopback", listener: "127.0.0.1:5001", remote: "127.0.0.1:1234", host: "127.0.0.1:5001"},
+		{name: "external listener", listener: "0.0.0.0:5001", remote: "192.0.2.1:1234", host: "192.0.2.1:5001"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			handler := NewForListener(db, slog.New(slog.NewTextHandler(io.Discard, nil)), runtime.NewLogs(20, nil), nil, test.listener, "", "")
@@ -281,10 +349,10 @@ func TestLocalListenerAuthenticationBoundary(t *testing.T) {
 				handler.ServeHTTP(response, request)
 				if path == "/api/v1/auth/session" {
 					var session struct{ Authenticated bool }
-					if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil || session.Authenticated != test.allowed {
+					if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil || session.Authenticated {
 						t.Fatalf("session: %s, error %v", response.Body.String(), err)
 					}
-				} else if (response.Code == http.StatusOK) != test.allowed {
+				} else if response.Code != http.StatusUnauthorized {
 					t.Fatalf("management request returned %d", response.Code)
 				}
 			}

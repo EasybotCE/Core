@@ -54,6 +54,7 @@ func (s *server) recentLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	if offset == 0 {
 		seen := make(map[string]bool, len(items))
+		memoryOnly := make([]string, 0)
 		for _, item := range items {
 			seen[item.ID] = true
 		}
@@ -63,6 +64,7 @@ func (s *server) recentLogs(w http.ResponseWriter, r *http.Request) {
 			}
 			items = append(items, item)
 			seen[item.ID] = true
+			memoryOnly = append(memoryOnly, item.ID)
 		}
 		sort.Slice(items, func(i, j int) bool {
 			if items[i].Time.Equal(items[j].Time) {
@@ -73,6 +75,12 @@ func (s *server) recentLogs(w http.ResponseWriter, r *http.Request) {
 		if len(items) > limit {
 			items = items[:limit]
 		}
+		persistedMemory, err := s.store.CountLogIDs(r.Context(), memoryOnly)
+		if err != nil {
+			http.Error(w, "log query failed", http.StatusInternalServerError)
+			return
+		}
+		total += len(memoryOnly) - persistedMemory
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
@@ -118,6 +126,8 @@ func (s *server) updateLogSettings(w http.ResponseWriter, r *http.Request) {
 
 func levelFor(level string) slog.Level {
 	switch level {
+	case "debug":
+		return slog.LevelDebug
 	case "error":
 		return slog.LevelError
 	case "warn":

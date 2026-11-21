@@ -45,9 +45,9 @@ type Settings struct {
 
 func defaults() fileConfig {
 	var value fileConfig
-	value.Server.Address = "127.0.0.1:5001"
+	value.Server.Address = "0.0.0.0:5001"
 	value.Server.AllowedHosts = "*"
-	value.Bridge.Address = "127.0.0.1:26991"
+	value.Bridge.Address = "0.0.0.0:26991"
 	value.Database.SQLitePath = "appdata/easybot.db"
 	value.Logging.Level = "info"
 	return value

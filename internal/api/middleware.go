@@ -57,6 +57,8 @@ func (s *server) observe(next http.Handler) http.Handler {
 			level := "info"
 			if status >= 500 {
 				level = "error"
+			} else if status == http.StatusUnauthorized {
+				level = "debug"
 			} else if status >= 400 {
 				level = "warn"
 			}

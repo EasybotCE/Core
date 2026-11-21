@@ -8,17 +8,12 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
 
 func (s *server) security(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.localOnly && requestIsLocal(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
 		if strings.HasPrefix(r.URL.Path, "/api/v1/") && r.Method != http.MethodOptions {
 			switch r.URL.Path {
 			case "/api/v1/health", "/api/v1/setup/status", "/api/v1/auth/session", "/api/v1/auth/login":
@@ -39,10 +34,6 @@ func (s *server) security(next http.Handler) http.Handler {
 }
 
 func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
-	if s.localOnly && requestIsLocal(r) {
-		writeJSON(w, http.StatusOK, map[string]bool{"initialized": true})
-		return
-	}
 	complete, err := s.store.SetupComplete(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "setup status unavailable"})
@@ -52,10 +43,6 @@ func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) authSession(w http.ResponseWriter, r *http.Request) {
-	if s.localOnly && requestIsLocal(r) {
-		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "authRequired": false})
-		return
-	}
 	cookie, err := r.Cookie(sessionCookie)
 	if err == nil {
 		if _, ok, lookupErr := s.store.SessionAdmin(r.Context(), sessionHash(cookie.Value)); lookupErr == nil && ok {
@@ -78,7 +65,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(body.Password), []byte(s.loginPassword)) != 1 {
+	if s.loginPassword == "" || subtle.ConstantTimeCompare([]byte(body.Password), []byte(s.loginPassword)) != 1 {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "登录密码错误"})
 		return
 	}
@@ -93,6 +80,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, r, token, expires)
+	s.resetLoginAttempts(r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
 }
 
@@ -137,46 +125,15 @@ func (s *server) allowLogin(remote string) bool {
 	return true
 }
 
-func remoteIsLoopback(remote string) bool {
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		return false
+func (s *server) resetLoginAttempts(remote string) {
+	key := remote
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		key = host
 	}
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	return ip != nil && ip.IsLoopback()
+	s.loginMu.Lock()
+	delete(s.loginAttempts, key)
+	s.loginMu.Unlock()
 }
-
-func requestIsLocal(r *http.Request) bool {
-	if !remoteIsLoopback(r.RemoteAddr) || !hostIsLoopback(r.Host) {
-		return false
-	}
-	if origin := r.Header.Get("Origin"); origin != "" {
-		parsed, err := url.Parse(origin)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || !hostIsLoopback(parsed.Host) {
-			return false
-		}
-	}
-	return true
-}
-
-func hostIsLoopback(value string) bool {
-	host := value
-	if parsedHost, _, err := net.SplitHostPort(value); err == nil {
-		host = parsedHost
-	}
-	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		host = strings.Trim(host, "[]")
-	}
-	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 func newSessionToken() (string, error) {
 	value := make([]byte, 32)
 	if _, err := rand.Read(value); err != nil {

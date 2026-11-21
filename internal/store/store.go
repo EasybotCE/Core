@@ -53,6 +53,11 @@ func Open(dsn string) (*Store, error) {
 	} else if strings.Contains(source, "://") && !strings.HasPrefix(source, "file://") {
 		return nil, fmt.Errorf("unsupported database URL scheme")
 	}
+	if dialect == "sqlite" {
+		if err := os.MkdirAll(filepath.Dir(source), 0750); err != nil {
+			return nil, err
+		}
+	}
 	driver := map[string]string{"sqlite": "sqlite", "mysql": "mysql", "postgres": "pgx"}[dialect]
 	db, err := sql.Open(driver, source)
 	if err != nil {

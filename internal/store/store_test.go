@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,6 +13,17 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestOpenCreatesDatabaseDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "appdata", "nested", "easybot.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		t.Fatalf("database file missing or invalid: info=%v err=%v", info, err)
+	}
+}
 func TestRecordLifecycle(t *testing.T) {
 	db, err := Open(t.TempDir() + "/easybot.db")
 	if err != nil {

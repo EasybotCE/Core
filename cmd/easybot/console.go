@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"easybot/internal/runtime"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -32,6 +34,33 @@ func (h *consoleHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *consoleHandler) Handle(_ context.Context, record slog.Record) error {
+	module := "Core"
+	var attributes []string
+	appendAttr := func(attr slog.Attr) bool {
+		if attr.Key == "module" {
+			module = consoleModule(attr.Value.Resolve().String())
+			return true
+		}
+		if attr.Key == "error" {
+			errorText := runtime.Redact(attr.Value.Resolve().String())
+			errorText = strings.ReplaceAll(strings.ReplaceAll(errorText, "\r", " "), "\n", " ")
+			if errorText != "" {
+				attributes = append(attributes, "error="+strconv.Quote(errorText))
+			}
+		}
+		return true
+	}
+	for _, attr := range h.attrs {
+		appendAttr(attr)
+	}
+	record.Attrs(appendAttr)
+	message := strings.ReplaceAll(strings.ReplaceAll(record.Message, "\r", " "), "\n", " ")
+	if len(attributes) > 0 {
+		message += " " + strings.Join(attributes, " ")
+	}
+	if strings.HasPrefix(message, "["+module+"] ") {
+		message = strings.TrimPrefix(message, "["+module+"] ")
+	}
 	var line strings.Builder
 	level, color := "INFO", "97"
 	switch {
@@ -44,22 +73,35 @@ func (h *consoleHandler) Handle(_ context.Context, record slog.Record) error {
 	case record.Level < slog.LevelInfo:
 		level, color = "DBUG", "37"
 	}
-	fmt.Fprint(&line, consoleColor("[", "90"), consoleColor(record.Time.Format("15:04:05"), "37"), consoleColor("][", "90"), consoleColor(level, color), consoleColor("]: ", "90"), consoleColor(record.Message, "97"))
-	appendAttr := func(attr slog.Attr) bool {
-		// 原版模板仅显示消息和异常，不重复追加结构化属性。
-		if attr.Key == "error" {
-			fmt.Fprint(&line, "\n", consoleColor(attr.Value.Resolve().String(), "97;41"))
-		}
-		return true
-	}
-	for _, attr := range h.attrs {
-		appendAttr(attr)
-	}
-	record.Attrs(appendAttr)
+	fmt.Fprint(&line, consoleColor("[", "90"), consoleColor(record.Time.Format("15:04:05"), "37"), consoleColor("][", "90"), consoleColor(level, color), consoleColor("][", "90"), consoleColor(module, "96"), consoleColor("]:", "90"), consoleColor(message, "97"))
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, err := fmt.Fprintln(os.Stdout, line.String())
 	return err
+}
+
+func consoleModule(module string) string {
+	switch module {
+	case "web":
+		return "WebUI"
+	case "daemon":
+		return "Core"
+	case "logs":
+		return "Log"
+	case "config":
+		return "Config"
+	case "api":
+		return "API"
+	case "adapter":
+		return "Adapter"
+	case "bridge":
+		return "Bridge"
+	default:
+		if module == "" {
+			return "Core"
+		}
+		return module
+	}
 }
 
 func (h *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -95,9 +137,8 @@ func printBanner(logger *slog.Logger) {
 	logger.Info("EasybotCE v0.1.0-dev")
 }
 
-func printStartup(logger *slog.Logger, address, boundAddress string, tls, localOnly bool, password string, initialPassword bool) {
-	host, _, _ := net.SplitHostPort(address)
-	_, port, _ := net.SplitHostPort(boundAddress)
+func printStartup(logger *slog.Logger, address string, tls bool, password string, initialPassword bool) {
+	host, port, _ := net.SplitHostPort(address)
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}
@@ -106,12 +147,7 @@ func printStartup(logger *slog.Logger, address, boundAddress string, tls, localO
 		scheme = "https"
 	}
 	logger.Info("[WebUI] 管理地址: " + scheme + "://" + net.JoinHostPort(host, port))
-	logger.Info("[WebUI] 监听地址: " + boundAddress)
-	if localOnly {
-		logger.Info("[WebUI] 本机免登录，直接进入管理台")
-	} else {
-		logger.Info("[WebUI] 已启用管理密码登录")
-	}
+	logger.Info("[WebUI] 已启用管理密码登录")
 	if initialPassword {
 		// Credentials are intentionally printed once to the terminal, never to persisted logs.
 		fmt.Fprintln(os.Stdout, consoleColor("[WebUI] 首次启动默认管理密码: "+password, "93"))

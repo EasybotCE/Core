@@ -1,4 +1,4 @@
-import { Activity, Boxes, Command, Gamepad2, LayoutDashboard, ListChecks, MessageSquareText, Radio, Shield, Users } from '@lucide/vue'
+import { Activity, Command, Gamepad2, LayoutDashboard, ListChecks, MessageSquareText, Radio, Shield, Users } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { Kind } from './models'
 
@@ -9,7 +9,6 @@ export const navigation: NavigationItem[] = [
   { id: 'adapters', label: '平台适配器', icon: Radio, group: '接入', kind: 'adapters' },
   { id: 'servers', label: 'Minecraft 服务器', icon: Gamepad2, group: '接入', kind: 'servers' },
   { id: 'groups', label: '群组', icon: MessageSquareText, group: '消息', kind: 'groups' },
-  { id: 'sync-rules', label: '同步规则', icon: Boxes, group: '消息', kind: 'sync-rules' },
   { id: 'players', label: '玩家与绑定', icon: Users, group: '玩家', kind: 'players' },
   { id: 'whitelist', label: '白名单', icon: ListChecks, group: '玩家', kind: 'whitelist' },
   { id: 'blacklist', label: '黑名单', icon: Shield, group: '玩家', kind: 'blacklist' },
