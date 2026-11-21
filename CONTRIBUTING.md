@@ -19,9 +19,9 @@ CI 在 PR 标题、正文说明或新增 commit 标题不含汉字时，通过�
 
 ## 开发与验证
 
-当前实现位于 `dev/`：`cmd/easybot` 为入口，`internal` 为后端，`web` 为前端。使用 Go 1.24+ 与 Node.js 20.19+，依赖以 `go.mod/go.sum` 和 `package-lock.json` 为准。详细运行方法见 [开发说明](dev/README.md)。
+当前实现位于 仓库根目录包含 Go 后端（`cmd/easybot`、`internal`）和 Vue 管理台（`web`）。使用 Go 1.24+ 与 Node.js 20.19+，依赖以 `go.mod/go.sum` 和 `package-lock.json` 为准。详细运行方法见 [开发说明](docs/开发说明.md)。
 
-后端在 `dev` 执行 `go test ./...` 和 `go vet ./...`；前端在 `dev/web` 执行 `npm ci` 和 `npm run build`。涉及 MySQL/PostgreSQL 时使用空的专用测试库执行集成检查。Windows 启动改动需要验证从其他工作目录启动 exe，并在验证后停止服务。
+后端在仓库根目录执行 `go test ./...` 和 `go vet ./...`；前端在 `web` 执行 `npm ci` 和 `npm run build`。涉及 MySQL/PostgreSQL 时使用空的专用测试库执行集成检查。Windows 启动改动需要验证从其他工作目录启动 exe，并在验证后停止服务。
 
 CI 在 PR、主分支推送、标签推送或手动触发时运行；普通开发分支请创建 PR 或手动运行。同一 PR 或分支的新运行会取消旧运行。跨平台任务完整执行 Go 测试和独立的 `go vet`，数据库任务只执行 `go test -count=1 -vet=off ./internal/store`，保证每次实际访问测试库。CI 使用与便携包一致的 `CGO_ENABLED=0` 和 `-trimpath` 编译参数，复用测试、静态检查与打包的编译缓存。
 
