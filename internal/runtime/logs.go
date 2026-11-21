@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +41,8 @@ type moduleHandler struct {
 	logs   *Logs
 	module string
 	output *slog.Logger
+	attrs  []slog.Attr
+	groups []string
 }
 
 func (h *moduleHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -48,24 +53,74 @@ func (h *moduleHandler) Handle(ctx context.Context, record slog.Record) error {
 	if err := h.output.Handler().Handle(ctx, record); err != nil {
 		return err
 	}
+	var message strings.Builder
+	message.WriteString(record.Message)
 	requestID := ""
+	for _, attr := range h.attrs {
+		appendLogAttr(&message, &requestID, "", attr)
+	}
 	record.Attrs(func(attr slog.Attr) bool {
-		if attr.Key == "request_id" {
-			requestID = attr.Value.String()
-		}
+		appendLogAttr(&message, &requestID, strings.Join(h.groups, "."), attr)
 		return true
 	})
 	level := strings.ToLower(record.Level.String())
-	h.logs.buffer.AddWithRequestID(level, h.module, record.Message, requestID)
+	h.logs.buffer.AddWithRequestID(level, h.module, message.String(), requestID)
 	return nil
 }
 
 func (h *moduleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &moduleHandler{logs: h.logs, module: h.module, output: h.output.With(attrsToArgs(attrs)...)}
+	next := *h
+	next.output = h.output.With(attrsToArgs(attrs)...)
+	// Freeze the current group at WithAttrs time, so later WithGroup calls
+	// affect only attributes added afterwards.
+	for i := len(h.groups) - 1; i >= 0; i-- {
+		attrs = []slog.Attr{{Key: h.groups[i], Value: slog.GroupValue(attrs...)}}
+	}
+	next.attrs = append(slices.Clone(h.attrs), attrs...)
+	return &next
 }
 
 func (h *moduleHandler) WithGroup(name string) slog.Handler {
-	return &moduleHandler{logs: h.logs, module: h.module, output: h.output.WithGroup(name)}
+	if name == "" {
+		return h
+	}
+	next := *h
+	next.output = h.output.WithGroup(name)
+	next.groups = append(slices.Clone(h.groups), name)
+	return &next
+}
+
+// Keep searchable context in the existing message column, without changing
+// the API or database schema. Redact whole credential values before quoting,
+// including values containing whitespace or punctuation.
+func appendLogAttr(message *strings.Builder, requestID *string, group string, attr slog.Attr) {
+	attr.Value = attr.Value.Resolve()
+	if attr.Equal(slog.Attr{}) {
+		return
+	}
+	key := attr.Key
+	if group != "" && key != "" {
+		key = group + "." + key
+	} else if key == "" {
+		key = group
+	}
+	if attr.Value.Kind() == slog.KindGroup {
+		for _, child := range attr.Value.Group() {
+			appendLogAttr(message, requestID, key, child)
+		}
+		return
+	}
+	if attr.Key == "request_id" {
+		*requestID = attr.Value.String()
+	}
+	value := Redact(fmt.Sprint(attr.Value.Any()))
+	if sensitiveLogKey.MatchString(key) {
+		value = "[REDACTED]"
+	}
+	message.WriteByte(' ')
+	message.WriteString(strconv.Quote(key))
+	message.WriteByte('=')
+	message.WriteString(strconv.Quote(value))
 }
 
 func attrsToArgs(attrs []slog.Attr) []any {
@@ -164,6 +219,7 @@ func (b *LogBuffer) Recent(limit int) []LogEntry {
 }
 
 var (
+	sensitiveLogKey  = regexp.MustCompile(`(?i)(token|password|passwd|secret|api[_-]?key|authorization|dsn|challenge|verification[_-]?code)$`)
 	secretAssignment = regexp.MustCompile(`(?i)(token|password|passwd|secret|api[_-]?key|authorization|dsn|challenge|verification[_-]?code)(\s*[=:]\s*)([^\s&,;]+)`)
 	bearerToken      = regexp.MustCompile(`(?i)bearer\s+[a-z0-9._~+/-]+=*`)
 	urlCredentials   = regexp.MustCompile(`(?i)(://[^:/\s]+:)[^@/\s]+@`)

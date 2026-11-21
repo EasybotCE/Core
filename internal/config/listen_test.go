@@ -6,8 +6,41 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strings"
 	"testing"
 )
+
+func TestLoadFileSecuresExistingPortableTemplate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	template, err := os.ReadFile("config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Include trailing whitespace to ensure rewriting also truncates the file.
+	template = append(template, []byte(strings.Repeat(" ", 4096))...)
+	if err := os.WriteFile(path, template, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	settings, generated, err := LoadFile(path)
+	if err != nil || !generated || !regexp.MustCompile(`^\d{12}$`).MatchString(settings.Password) {
+		t.Fatalf("load: generated=%v err=%v", generated, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+		t.Errorf("password file permissions = %o, want 600", info.Mode().Perm())
+	}
+	again, generated, err := LoadFile(path)
+	if err != nil || generated || again.Password != settings.Password {
+		t.Fatalf("reload: generated=%v err=%v", generated, err)
+	}
+}
 
 func TestLoadFileCreatesAndPersistsDefaultPassword(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")

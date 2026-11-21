@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -38,6 +38,7 @@ const folder = mkdtempSync(join(release, '.package-'))
 try {
   copyFileSync(join(root, output), join(folder, target === 'windows' ? 'easybotce.exe' : 'easybotce'))
   copyFileSync(join(root, 'internal', 'config', 'config.example.json'), join(folder, 'config.json'))
+  chmodSync(join(folder, 'config.json'), 0o600)
   cpSync(join(root, 'web', 'dist'), join(folder, 'web', 'dist'), { recursive: true })
   for (const file of ['LICENSE', 'AUTHORS.md']) copyFileSync(join(root, file), join(folder, file))
   writeFileSync(join(folder, '使用说明.txt'), [

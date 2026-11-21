@@ -1,6 +1,8 @@
 # Local runtime data and secrets
 /appdata/
 config.json
+appsettings.json
+token.txt
 .env
 .env.*
 !.env.example
@@ -15,6 +17,7 @@ config.json
 /web/dist/
 /web/.vscode/
 /web/.idea/
+/.idea/
 
 # Decompiled reference exports and bundled legacy releases
 /decompiled/
@@ -30,6 +33,3 @@ config.json
 
 # CodeBuddy 
 .codebuddy/
-
-/release
-/bin

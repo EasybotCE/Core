@@ -196,14 +196,19 @@ func normalizeAddress(address, name string) (string, error) {
 }
 
 func writeConfig(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if os.IsExist(err) {
-		if err := os.WriteFile(path, data, 0600); err != nil {
-			return err
-		}
-		return nil
-	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0600)
 	if err != nil {
+		return err
+	}
+	// The portable package contains an existing, normally 0644 template.
+	// Restrict that file before writing a generated plaintext password; the
+	// mode passed to OpenFile only applies when creating a new file.
+	if err := file.Chmod(0600); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Truncate(0); err != nil {
+		file.Close()
 		return err
 	}
 	_, writeErr := file.Write(data)

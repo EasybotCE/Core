@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,39 @@ import (
 	"easybot/internal/runtime"
 	"easybot/internal/store"
 )
+
+func TestModuleLogsPersistDiagnosticContext(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createTestSession(t, db)
+	logs := runtime.NewLogs(10, nil)
+	logs.SetSink(func(entry runtime.LogEntry) {
+		if err := db.WriteLog(context.Background(), entry); err != nil {
+			t.Fatal(err)
+		}
+	})
+	logs.New("bridge").With("request_id", "review-request").Error("连接失败",
+		"server", "survival", "error", errors.New("connection refused"), "password", "private password with spaces")
+	// Query with an empty memory buffer to prove the context was persisted.
+	handler := New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), runtime.NewLogs(10, nil))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/logs?q=connection%20refused&requestId=review-request&component=bridge", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var page struct {
+		Items []runtime.LogEntry `json:"items"`
+		Total int                `json:"total"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Total != 1 {
+		t.Fatalf("persisted log query: %d %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(page.Items[0].Message, "survival") || strings.Contains(response.Body.String(), "private password") {
+		t.Fatalf("missing context or credential leak: %s", response.Body.String())
+	}
+}
 
 func createTestSession(t *testing.T, db *store.Store) {
 	t.Helper()
