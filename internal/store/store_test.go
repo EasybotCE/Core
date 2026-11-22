@@ -111,8 +111,8 @@ func TestExternalDatabaseContract(t *testing.T) {
 	defer db.Close()
 
 	var version int
-	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
-		t.Fatalf("expected migration version 4, got %d, error %v", version, err)
+	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 7 {
+		t.Fatalf("expected migration version 7, got %d, error %v", version, err)
 	}
 
 	if _, err := db.db.ExecContext(ctx,
@@ -173,7 +173,7 @@ func TestExternalDatabaseContract(t *testing.T) {
 		t.Fatalf("reopening migrated database failed: %v", err)
 	}
 	defer db.Close()
-	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 7 {
 		t.Fatalf("restart changed migration version: version=%d error=%v", version, err)
 	}
 	if got, err := db.List(ctx, "servers"); err != nil || len(got) != 1 || got[0].Name != "contract-server-updated" {
