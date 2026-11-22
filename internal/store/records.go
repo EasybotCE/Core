@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+
 	"database/sql"
+	"easybot/internal/model"
 	"errors"
 	"strings"
 	"time"
@@ -13,22 +15,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Record struct {
-	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`
-	Name      string    `json:"name"`
-	Detail    string    `json:"detail"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
+// Record and Kinds remain aliases for existing storage callers.
+type Record = model.Record
 
-var Kinds = map[string]bool{
-	"adapters": true, "servers": true, "players": true, "social-accounts": true,
-	"groups": true, "whitelist": true, "blacklist": true, "commands": true,
-	"ai-providers": true, "image-templates": true, "plugins": true, "settings": true,
-	"sync-rules": true, "chat-images": true, "placeholders": true, "player-statistics": true, "skins": true,
-}
+var Kinds = model.Kinds
 
 func (s *Store) Get(ctx context.Context, kind, id string) (Record, error) {
 	var item Record

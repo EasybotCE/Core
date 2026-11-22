@@ -29,23 +29,32 @@ const maxFrameSize = 1 << 20
 
 // HelloPacket is sent by the host immediately after the socket opens. Token is
 // a per-connection nonce and is NOT the server token used for authentication.
+const ProtocolVersion = 2
+
 type HelloPacket struct {
-	Op        OpCode `json:"op"`
-	Version   string `json:"version"`
-	System    string `json:"system"`
-	Dotnet    string `json:"dotnet"`
-	SessionID string `json:"session_id"`
-	Token     string `json:"token"`
-	Interval  int    `json:"interval"`
+	ProtocolVersion int    `json:"protocol_version"`
+	AuthMethod      string `json:"auth_method"`
+	Op              OpCode `json:"op"`
+	Version         string `json:"version"`
+	System          string `json:"system"`
+	Dotnet          string `json:"dotnet"`
+	SessionID       string `json:"session_id"`
+	Token           string `json:"token"`
+	Interval        int    `json:"interval"`
 }
 
 // IdentifyPacket is the plugin's answer to HelloPacket. Token is the long-lived
 // per-server token configured inside the Minecraft plugin.
 type IdentifyPacket struct {
-	Op                OpCode `json:"op"`
-	Token             string `json:"token"`
-	PluginVersion     string `json:"plugin_version"`
-	ServerDescription string `json:"server_description"`
+	ProtocolVersion   int      `json:"protocol_version"`
+	ConnectionID      string   `json:"connection_id"`
+	ServerID          string   `json:"server_id"`
+	Timestamp         int64    `json:"timestamp"`
+	Proof             string   `json:"proof"`
+	Capabilities      []string `json:"capabilities,omitempty"`
+	Op                OpCode   `json:"op"`
+	PluginVersion     string   `json:"plugin_version"`
+	ServerDescription string   `json:"server_description"`
 }
 
 // IdentifySuccessPacket confirms authentication and tells the plugin which
@@ -97,6 +106,7 @@ type SyncEnterExitMessagePacket struct {
 	ExecOp     string     `json:"exec_op"`
 	Player     PlayerInfo `json:"player"`
 	IsEnter    bool       `json:"is_enter"`
+	Players    string     `json:"players,omitempty"`
 }
 
 // SyncDeathMessagePacket reports a death message.
@@ -150,6 +160,8 @@ const (
 	ExecSyncEnterExitMessage = "SYNC_ENTER_EXIT_MESSAGE"
 	ExecSyncDeathMessage     = "SYNC_DEATH_MESSAGE"
 	ExecPlayerJoin           = "PLAYER_JOIN"
+	ExecStartBind            = "START_BIND"
+	ExecGetSocialAccount     = "GET_SOCIAL_ACCOUNT"
 	ExecReportPlayer         = "REPORT_PLAYER"
 	ExecServerStateChanged   = "SERVER_STATE_CHANGED"
 )

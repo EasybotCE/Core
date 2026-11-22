@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"easybot/internal/store"
 )
 
 // SocialSender is the subset of the OneBot 11 manager the router needs. It is
@@ -38,28 +36,32 @@ const (
 	defaultMinecraft  = "[{server}] {player}: {content}"
 	defaultSocial     = "[{group}] {sender}: {content}"
 	echoWindow        = 5 * time.Second
+	maxSeenEvents     = 10000
 )
 
 // Router moves chat between connected Minecraft servers and OneBot 11 groups.
 // It also suppresses the echo a two-way rule would otherwise create.
 type Router struct {
-	db     *store.Store
+	db     Repository
 	bridge *Manager
 	social SocialSender
 	logger *slog.Logger
 
 	mu     sync.Mutex
 	recent map[string]time.Time
+	seen   map[string]time.Time
 }
 
-func NewRouter(db *store.Store, bridgeManager *Manager, social SocialSender, logger *slog.Logger) *Router {
-	return &Router{db: db, bridge: bridgeManager, social: social, logger: logger, recent: make(map[string]time.Time)}
+func NewRouter(db Repository, bridgeManager *Manager, social SocialSender, logger *slog.Logger) *Router {
+	return &Router{db: db, bridge: bridgeManager, social: social, logger: logger, recent: make(map[string]time.Time), seen: make(map[string]time.Time)}
 }
 
 // OnMinecraftChat forwards a plugin chat line to every matching social group.
 func (r *Router) OnMinecraftChat(serverID string, packet SyncMessagePacket) {
 	content := strings.TrimSpace(packet.Message)
-	if content == "" {
+	// The Minecraft plugin marks parsed chat commands explicitly; do not leak
+	// command bodies into linked social groups.
+	if packet.UseCommand || content == "" {
 		return
 	}
 	if r.consumeEcho(serverID, content) {
@@ -85,8 +87,18 @@ func (r *Router) OnMinecraftChat(serverID string, packet SyncMessagePacket) {
 // OnSocialMessage forwards a group message from OneBot 11 into the matching
 // Minecraft servers.
 func (r *Router) OnSocialMessage(adapterID, groupID, senderName, content string) {
+	r.onSocialMessage("", adapterID, groupID, senderName, content)
+}
+
+// OnSocialEvent preserves the adapter event identity so reconnect/replay of the
+// same platform event cannot duplicate deliveries to Minecraft.
+func (r *Router) OnSocialEvent(eventID, adapterID, groupID, senderName, content string) {
+	r.onSocialMessage(eventID, adapterID, groupID, senderName, content)
+}
+
+func (r *Router) onSocialMessage(eventID, adapterID, groupID, senderName, content string) {
 	content = strings.TrimSpace(content)
-	if content == "" {
+	if content == "" || (eventID != "" && !r.firstEvent(adapterID, eventID)) {
 		return
 	}
 	for _, route := range r.routes() {
@@ -148,6 +160,35 @@ func (route Route) allowsMCToSocial() bool {
 
 func (route Route) allowsSocialToMC() bool {
 	return route.Direction == DirectionBoth || route.Direction == DirectionChatToMC
+}
+
+// firstEvent bounds duplicate suppression to a short replay window and scopes
+// IDs to their source adapter to avoid collisions between platforms.
+func (r *Router) firstEvent(source, eventID string) bool {
+	now := time.Now()
+	key := source + "\x00" + eventID
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, at := range r.seen {
+		if now.Sub(at) > 10*time.Minute {
+			delete(r.seen, id)
+		}
+	}
+	if _, exists := r.seen[key]; exists {
+		return false
+	}
+	if len(r.seen) >= maxSeenEvents {
+		var oldestID string
+		var oldest time.Time
+		for id, at := range r.seen {
+			if oldestID == "" || at.Before(oldest) {
+				oldestID, oldest = id, at
+			}
+		}
+		delete(r.seen, oldestID)
+	}
+	r.seen[key] = now
+	return true
 }
 
 // markEcho remembers a line the host just pushed into Minecraft, so a plugin

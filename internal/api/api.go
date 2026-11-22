@@ -4,11 +4,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"easybot/internal/adapter/onebot11"
+	"easybot/internal/application"
 	"easybot/internal/bridge"
 	"easybot/internal/config"
 	"easybot/internal/runtime"
@@ -16,25 +16,28 @@ import (
 )
 
 type server struct {
-	loginPassword  string
-	loginUserID    string
+	adapterService *application.Adapters
+	recordService  *application.Records
+	serverService  *application.Servers
+	auth           *application.Auth
+	logService     *application.Logs
 	store          *store.Store
+	bindings       *application.Bindings
 	logger         *slog.Logger
 	logs           *runtime.Logs
-	logWriter      *runtime.AsyncLogWriter
 	adapterManager *onebot11.Manager
 	bridgeManager  *bridge.Manager
 	loginMu        sync.Mutex
 	loginAttempts  map[string]loginAttempt
 }
 
+// Retained only for existing package-local test fixtures; throttling state is owned by application.Auth.
 type loginAttempt struct {
 	start time.Time
 	count int
 }
 
 const sessionCookie = "easybot_session"
-const sessionLifetime = 7 * 24 * time.Hour
 
 func New(db *store.Store, logger *slog.Logger, logs *runtime.Logs, writers ...*runtime.AsyncLogWriter) http.Handler {
 	return NewWithAdapterManager(db, logger, logs, nil, writers...)
@@ -49,12 +52,24 @@ func NewForListener(db *store.Store, logger *slog.Logger, logs *runtime.Logs, ad
 }
 
 func NewForListenerWithRuntimes(db *store.Store, logger *slog.Logger, logs *runtime.Logs, adapters *onebot11.Manager, bridges *bridge.Manager, address string, password string, userID string, writers ...*runtime.AsyncLogWriter) http.Handler {
-	s := &server{store: db, logger: logger, logs: logs, adapterManager: adapters, bridgeManager: bridges, loginAttempts: make(map[string]loginAttempt)}
-	s.loginPassword = password
-	s.loginUserID = userID
-	if len(writers) > 0 {
-		s.logWriter = writers[0]
+	s := &server{store: db, bindings: application.NewBindings(db), logger: logger, logs: logs, adapterManager: adapters, bridgeManager: bridges}
+	var adapterRuntime application.AdapterRuntime
+	if adapters != nil {
+		adapterRuntime = adapters
 	}
+	var bridgeRuntime application.BridgeRuntime
+	if bridges != nil {
+		bridgeRuntime = bridges
+	}
+	s.adapterService = application.NewAdapters(db, adapterRuntime, logger)
+	s.recordService = application.NewRecords(db)
+	s.serverService = application.NewServers(db, bridgeRuntime, logs.New("bridge"))
+	s.auth = application.NewAuth(db, password, userID)
+	var writer application.LogWriteController
+	if len(writers) > 0 && writers[0] != nil {
+		writer = writers[0]
+	}
+	s.logService = application.NewLogs(db, logs, writer)
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	handler := s.security(s.cors(mux))
@@ -66,20 +81,6 @@ func NewForListenerWithRuntimes(db *store.Store, logger *slog.Logger, logs *runt
 		}
 		handler.ServeHTTP(w, r)
 	}))
-}
-
-func staticDirectory() string {
-	if executable, err := os.Executable(); err == nil {
-		dir := filepath.Dir(executable)
-		for _, base := range []string{dir, filepath.Dir(dir)} {
-			candidate := filepath.Join(base, "web", "dist")
-			if info, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !info.IsDir() {
-				return candidate
-			}
-		}
-	}
-	// go run 的临时可执行文件不与前端资源放在一起。
-	return "web/dist"
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {

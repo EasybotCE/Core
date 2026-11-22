@@ -8,13 +8,20 @@ import (
 	"sync"
 	"time"
 
-	"easybot/internal/store"
+	"easybot/internal/adapter/qqbot"
+	"easybot/internal/model"
 )
 
 var ErrAdapterNotFound = errors.New("adapter not found")
 
+// ConfigurationRepository supplies adapter configuration without coupling
+// platform connection management to SQL or the concrete Store.
+type ConfigurationRepository interface {
+	List(context.Context, string) ([]model.Record, error)
+}
+
 type Manager struct {
-	store    *store.Store
+	store    ConfigurationRepository
 	ctx      context.Context
 	cancel   context.CancelFunc
 	onEvent  func(string, Event)
@@ -23,7 +30,7 @@ type Manager struct {
 	failures map[string]Status
 }
 
-func NewManager(parent context.Context, db *store.Store, onEvent func(string, Event)) *Manager {
+func NewManager(parent context.Context, db ConfigurationRepository, onEvent func(string, Event)) *Manager {
 	ctx, cancel := context.WithCancel(parent)
 	return &Manager{store: db, ctx: ctx, cancel: cancel, onEvent: onEvent, items: make(map[string]runtimeAdapter), failures: make(map[string]Status)}
 }
@@ -67,11 +74,11 @@ func (m *Manager) Test(ctx context.Context, id string) (map[string]any, error) {
 		return nil, err
 	}
 	if adapterType == "QQBot" {
-		config, parseErr := ParseQQConfig(raw)
+		config, parseErr := qqbot.ParseQQConfig(raw)
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		return TestQQConnection(ctx, config)
+		return qqbot.TestQQConnection(ctx, config)
 	}
 	config, parseErr := ParseConfig(raw)
 	if parseErr != nil {
@@ -93,11 +100,11 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	}
 	var runtime runtimeAdapter
 	if adapterType == "QQBot" {
-		config, parseErr := ParseQQConfig(raw)
+		config, parseErr := qqbot.ParseQQConfig(raw)
 		if parseErr != nil {
 			return parseErr
 		}
-		runtime = NewQQRuntime(id, config, func(event Event) {
+		runtime = qqbot.NewQQRuntime(id, config, func(event Event) {
 			if m.onEvent != nil {
 				m.onEvent(id, event)
 			}
@@ -211,13 +218,13 @@ func (m *Manager) get(id string) runtimeAdapter {
 	return m.items[id]
 }
 
-func (m *Manager) loadConfig(ctx context.Context, id string) (store.Record, Config, error) {
+func (m *Manager) loadConfig(ctx context.Context, id string) (model.Record, Config, error) {
 	item, adapterType, raw, err := m.loadRawRecord(ctx, id)
 	if err != nil {
-		return store.Record{}, Config{}, err
+		return model.Record{}, Config{}, err
 	}
 	if adapterType != "Onebot11" {
-		return store.Record{}, Config{}, &APIError{Code: "adapter_type_unsupported", Message: "该适配器不是 OneBot 11", Retryable: false}
+		return model.Record{}, Config{}, &APIError{Code: "adapter_type_unsupported", Message: "该适配器不是 OneBot 11", Retryable: false}
 	}
 	config, err := ParseConfig(raw)
 	return item, config, err
@@ -228,35 +235,35 @@ func (m *Manager) loadRawConfig(ctx context.Context, id string) (string, json.Ra
 	return adapterType, raw, err
 }
 
-func (m *Manager) loadRawRecord(ctx context.Context, id string) (store.Record, string, json.RawMessage, error) {
+func (m *Manager) loadRawRecord(ctx context.Context, id string) (model.Record, string, json.RawMessage, error) {
 	item, err := m.getRecord(ctx, id)
 	if err != nil {
-		return store.Record{}, "", nil, err
+		return model.Record{}, "", nil, err
 	}
 	adapterType, raw, err := parseRecord(item)
 	if err != nil {
-		return store.Record{}, "", nil, err
+		return model.Record{}, "", nil, err
 	}
 	if adapterType != "Onebot11" && adapterType != "QQBot" {
-		return store.Record{}, "", nil, &APIError{Code: "adapter_type_unsupported", Message: "当前运行时不支持该适配器", Retryable: false}
+		return model.Record{}, "", nil, &APIError{Code: "adapter_type_unsupported", Message: "当前运行时不支持该适配器", Retryable: false}
 	}
 	return item, adapterType, raw, nil
 }
 
-func (m *Manager) getRecord(ctx context.Context, id string) (store.Record, error) {
+func (m *Manager) getRecord(ctx context.Context, id string) (model.Record, error) {
 	items, err := m.store.List(ctx, "adapters")
 	if err != nil {
-		return store.Record{}, err
+		return model.Record{}, err
 	}
 	for _, item := range items {
 		if item.ID == id {
 			return item, nil
 		}
 	}
-	return store.Record{}, ErrAdapterNotFound
+	return model.Record{}, ErrAdapterNotFound
 }
 
-func parseRecord(item store.Record) (string, json.RawMessage, error) {
+func parseRecord(item model.Record) (string, json.RawMessage, error) {
 	var detail struct {
 		AdapterType string          `json:"adapterType"`
 		Config      json.RawMessage `json:"config"`

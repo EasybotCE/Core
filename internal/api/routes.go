@@ -9,7 +9,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	s.registerAdapterRoutes(mux)
 	s.registerLogRoutes(mux)
 	s.registerBridgeRoutes(mux)
-	mux.Handle("/", http.FileServer(http.Dir(staticDirectory())))
+	s.registerBindingRoutes(mux)
 }
 
 func (s *server) registerSystemRoutes(mux *http.ServeMux) {
@@ -58,4 +58,12 @@ func (s *server) registerBridgeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/bridge/{id}/status", s.bridgeStatus)
 	mux.HandleFunc("POST /api/v1/bridge/{id}/send", s.bridgeSend)
 	mux.HandleFunc("POST /api/v1/servers/{id}/token", s.rotateServerToken)
+}
+
+func (s *server) registerBindingRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/bindings", s.listBindings)
+	mux.HandleFunc("POST /api/v1/bindings/challenges", s.bindingChallenges)
+	mux.HandleFunc("POST /api/v1/bindings/confirm", s.confirmBinding)
+	mux.HandleFunc("DELETE /api/v1/bindings/{id}", s.deleteBinding)
+	mux.HandleFunc("GET /api/v1/bindings/audit", s.bindingAudit)
 }

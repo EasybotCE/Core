@@ -19,6 +19,7 @@ const requestId = defineModel<string>('requestId', { required: true })
 const from = defineModel<string>('from', { required: true })
 const to = defineModel<string>('to', { required: true })
 const persistence = defineModel<boolean>('persistence', { required: true })
+const persistLevel = defineModel<string>('persistLevel', { required: true })
 const retentionDays = defineModel<number>('retentionDays', { required: true })
 const maxRows = defineModel<number>('maxRows', { required: true })
 
@@ -36,6 +37,7 @@ const emit = defineEmits<{
     <div class="mb-4 flex flex-wrap items-end justify-between gap-3"><div><div class="mb-1.5 text-[13px] text-[#89959a]">系统</div><h1 class="text-2xl font-semibold tracking-normal">运行日志</h1><p class="mt-1 text-[13px] text-[#7d898e]">{{ logStatus?.persistent ? '持久化已启用' : '仅保留内存日志' }} · 丢弃 {{ logStatus?.droppedWrites ?? 0 }} / 写入失败 {{ logStatus?.failedWrites ?? 0 }}</p></div><button class="btn-secondary" @click="emit('refresh')"><Activity :size="15" />刷新</button></div>
     <div class="mb-4 flex flex-wrap items-end gap-3 border-y border-[#e6ebec] bg-white p-3">
       <label class="flex h-9 items-center gap-2 text-[13px]"><input v-model="persistence" type="checkbox" class="accent-[#315f4a]" />持久化日志</label>
+      <label class="field gap-1!">保存最低级别<select v-model="persistLevel" class="h-9! w-28!"><option value="debug">DEBUG</option><option value="info">INFO</option><option value="warn">WARN</option><option value="error">ERROR</option></select></label>
       <label class="field gap-1!">保留天数<input v-model.number="retentionDays" type="number" min="1" max="3650" class="h-9! w-28!" /></label>
       <label class="field gap-1!">最大记录数<input v-model.number="maxRows" type="number" min="1000" max="10000000" step="1000" class="h-9! w-36!" /></label>
       <button class="btn-primary compact ml-auto" :disabled="savingLogSettings" @click="emit('saveSettings')"><Check :size="14" />{{ savingLogSettings ? '保存中…' : '保存策略' }}</button>

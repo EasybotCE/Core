@@ -54,11 +54,9 @@ func (s *server) observe(next http.Handler) http.Handler {
 			status = http.StatusOK
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/v1/") && (r.Method != http.MethodGet || status >= 400) {
-			level := "info"
+			level := "debug"
 			if status >= 500 {
 				level = "error"
-			} else if status == http.StatusUnauthorized {
-				level = "debug"
 			} else if status >= 400 {
 				level = "warn"
 			}

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	adaptertypes "easybot/internal/adapter/types"
 	logruntime "easybot/internal/runtime"
 	"github.com/gorilla/websocket"
 )
@@ -25,55 +26,20 @@ type Config struct {
 	HeartBeatInterval int    `json:"HeartBeatInterval"`
 }
 
-type State string
+type State = adaptertypes.State
 
 const (
-	StateStopped      State = "stopped"
-	StateStarting     State = "starting"
-	StateConnected    State = "connected"
-	StateReconnecting State = "reconnecting"
-	StateStopping     State = "stopping"
-	StateFailed       State = "failed"
+	StateStopped      = adaptertypes.StateStopped
+	StateStarting     = adaptertypes.StateStarting
+	StateConnected    = adaptertypes.StateConnected
+	StateReconnecting = adaptertypes.StateReconnecting
+	StateStopping     = adaptertypes.StateStopping
+	StateFailed       = adaptertypes.StateFailed
 )
 
-type Status struct {
-	State          State      `json:"state"`
-	ConnectedAt    *time.Time `json:"connectedAt,omitempty"`
-	LastReceivedAt *time.Time `json:"lastReceivedAt,omitempty"`
-	LastError      string     `json:"lastError,omitempty"`
-	LastErrorCode  string     `json:"lastErrorCode,omitempty"`
-	ReconnectCount uint64     `json:"reconnectCount"`
-	Received       uint64     `json:"received"`
-	Sent           uint64     `json:"sent"`
-	SelfID         string     `json:"selfId,omitempty"`
-	Nickname       string     `json:"nickname,omitempty"`
-	ConnectionID   string     `json:"connectionId,omitempty"`
-}
-
-type Event struct {
-	ID            string          `json:"id"`
-	Type          string          `json:"type"`
-	SubType       string          `json:"subType,omitempty"`
-	MetaEventType string          `json:"metaEventType,omitempty"`
-	NoticeType    string          `json:"noticeType,omitempty"`
-	MessageID     string          `json:"messageId,omitempty"`
-	MessageType   string          `json:"messageType,omitempty"`
-	SelfID        string          `json:"selfId,omitempty"`
-	PeerID        string          `json:"peerId,omitempty"`
-	SenderID      string          `json:"senderId,omitempty"`
-	SenderName    string          `json:"senderName,omitempty"`
-	Content       string          `json:"content,omitempty"`
-	OccurredAt    time.Time       `json:"occurredAt"`
-	Raw           json.RawMessage `json:"raw,omitempty"`
-}
-
-type APIError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-}
-
-func (e *APIError) Error() string { return e.Message }
+type Status = adaptertypes.Status
+type Event = adaptertypes.Event
+type APIError = adaptertypes.APIError
 
 var Capabilities = []string{"group_message_receive", "private_message_receive", "group_message_send", "private_message_send", "group_list", "heartbeat"}
 
@@ -521,11 +487,14 @@ func classifyDialError(err error, response *http.Response) error {
 	if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
 		return &APIError{Code: "adapter_auth_failed", Message: "OneBot 鉴权失败，请检查 AccessToken", Retryable: false}
 	}
+	if response != nil {
+		return &APIError{Code: "adapter_handshake_failed", Message: fmt.Sprintf("OneBot WebSocket 握手失败：HTTP %d %s", response.StatusCode, http.StatusText(response.StatusCode)), Retryable: response.StatusCode >= 500}
+	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		return apiErr
 	}
-	return &APIError{Code: "adapter_network_error", Message: "无法连接 OneBot WebSocket 服务", Retryable: true}
+	return &APIError{Code: "adapter_network_error", Message: "无法连接 OneBot WebSocket 服务：" + logruntime.Redact(err.Error()), Retryable: true}
 }
 
 func classifyReadError(err error) error {

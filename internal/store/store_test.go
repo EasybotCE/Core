@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"easybot/internal/runtime"
+
 	"github.com/google/uuid"
 )
 
 func TestOpenCreatesDatabaseDirectory(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "appdata", "nested", "easybot.db")
+	path := filepath.Join(t.TempDir(), "appdata", "nested", "EasybotCE.db")
 	db, err := Open(path)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -25,7 +26,7 @@ func TestOpenCreatesDatabaseDirectory(t *testing.T) {
 	}
 }
 func TestRecordLifecycle(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestRecordLifecycle(t *testing.T) {
 }
 
 func TestSaveRejectsInvalidInput(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestSaveRejectsInvalidInput(t *testing.T) {
 }
 
 func TestSchemaMigrationIsRecorded(t *testing.T) {
-	path := t.TempDir() + "/easybot.db"
+	path := t.TempDir() + "/EasybotCE.db"
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -78,8 +79,8 @@ func TestSchemaMigrationIsRecorded(t *testing.T) {
 	if err := db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 {
-		t.Fatalf("expected schema version 4, got %d", version)
+	if version != 7 {
+		t.Fatalf("expected schema version 7, got %d", version)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -89,7 +90,7 @@ func TestSchemaMigrationIsRecorded(t *testing.T) {
 		t.Fatalf("reopening migrated database: %v", err)
 	}
 	defer db.Close()
-	if err := db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+	if err := db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 7 {
 		t.Fatalf("repeated startup changed migration version to %d, error %v", version, err)
 	}
 }
@@ -192,7 +193,7 @@ func TestExternalDatabaseContract(t *testing.T) {
 }
 
 func TestRuntimeLogsFilteringRedactionAndRetention(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +229,7 @@ func TestRuntimeLogsFilteringRedactionAndRetention(t *testing.T) {
 }
 
 func TestInitialAdminAndSessionLifecycle(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}

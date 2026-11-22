@@ -44,6 +44,8 @@ const schemas: Record<string, Field[]> = {
   servers: [
     { key: 'host', label: '服务器地址', type: 'text', placeholder: '127.0.0.1', hint: '桥接令牌由主程序生成，显示在弹窗顶部' },
     { key: 'port', label: '端口', type: 'number', placeholder: '25565' },
+    { key: 'requireBinding', label: '强制要求账号绑定', type: 'bool', hint: '启用后，未绑定玩家的登录事件会被拒绝；需 Bridge 在线' },
+    { key: 'kickMessage', label: '未绑定拒绝提示', type: 'text', placeholder: '请先完成账号绑定后再进入服务器。' },
   ],
   'sync-rules': [
     { key: 'serverId', label: 'Minecraft 服务器', type: 'select', options: props.serverOptions ?? [] },

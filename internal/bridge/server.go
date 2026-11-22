@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"easybot/internal/store"
+	"easybot/internal/model"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -31,10 +32,15 @@ var (
 // optional and are invoked from the socket read goroutine, so they must not
 // block for long.
 type Callbacks struct {
-	OnChat      func(serverID string, packet SyncMessagePacket)
-	OnEnterExit func(serverID string, packet SyncEnterExitMessagePacket)
-	OnDeath     func(serverID string, packet SyncDeathMessagePacket)
-	OnState     func(serverID string, online bool)
+	OnChat func(serverID string, packet SyncMessagePacket)
+	// OnStartBind and OnGetSocialAccount implement binding calls from the official game plugins.
+	OnStartBind        func(serverID, playerName string) (model.BindingChallenge, error)
+	OnGetSocialAccount func(serverID, playerName string) (model.Binding, error)
+	// OnPlayerJoin runs binding admission and challenge creation before the plugin receives its join callback.
+	OnPlayerJoin func(serverID string, packet SyncMessagePacket, requireBinding bool, kickMessage string) (model.BindingJoinResult, error)
+	OnEnterExit  func(serverID string, packet SyncEnterExitMessagePacket)
+	OnDeath      func(serverID string, packet SyncDeathMessagePacket)
+	OnState      func(serverID string, online bool)
 }
 
 // Status is the observed connection state of one Minecraft server. It is never
@@ -45,6 +51,9 @@ type Status struct {
 	State             string     `json:"state"`
 	PluginVersion     string     `json:"pluginVersion,omitempty"`
 	ServerDescription string     `json:"serverDescription,omitempty"`
+	ProtocolVersion   int        `json:"protocolVersion"`
+	ConnectionID      string     `json:"connectionId,omitempty"`
+	Capabilities      []string   `json:"capabilities,omitempty"`
 	RemoteAddr        string     `json:"remoteAddr,omitempty"`
 	ConnectedAt       *time.Time `json:"connectedAt,omitempty"`
 	LastSeenAt        *time.Time `json:"lastSeenAt,omitempty"`
@@ -55,7 +64,7 @@ type Status struct {
 // Manager owns every live plugin connection and exposes the host side of the
 // Bridge protocol as an http.Handler mounted on /bridge.
 type Manager struct {
-	db      *store.Store
+	db      Repository
 	logger  *slog.Logger
 	call    Callbacks
 	upgrade websocket.Upgrader
@@ -63,25 +72,25 @@ type Manager struct {
 	mu       sync.RWMutex
 	sessions map[string]*session
 	statuses map[string]Status
+	closed   bool
 }
 
-func NewManager(db *store.Store, logger *slog.Logger, callbacks Callbacks) *Manager {
+func NewManager(db Repository, logger *slog.Logger, callbacks Callbacks) *Manager {
 	return &Manager{
-		db:       db,
-		logger:   logger,
-		call:     callbacks,
-		sessions: make(map[string]*session),
-		statuses: make(map[string]Status),
-		upgrade: websocket.Upgrader{
-			HandshakeTimeout: 5 * time.Second,
-			// The plugin is a desktop-side client, not a browser; it does not
-			// send an Origin header.
-			CheckOrigin: func(*http.Request) bool { return true },
-		},
+		db: db, logger: logger, call: callbacks, sessions: make(map[string]*session), statuses: make(map[string]Status),
+		upgrade: websocket.Upgrader{HandshakeTimeout: 5 * time.Second, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }},
 	}
 }
 
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	m.mu.RLock()
+	closed := m.closed
+	m.mu.RUnlock()
+	if closed {
+		http.Error(w, "bridge is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+
 	conn, err := m.upgrade.Upgrade(w, r, nil)
 	if err != nil {
 		m.logger.Warn("bridge upgrade failed", "remote", r.RemoteAddr, "error", err)
@@ -96,13 +105,15 @@ func (m *Manager) serve(conn *websocket.Conn, remoteAddr string) {
 
 	s := &session{id: uuid.NewString(), conn: conn, remoteAddr: remoteAddr, pending: make(map[string]chan []byte)}
 
+	nonce := uuid.NewString()
 	if err := s.writeJSON(HelloPacket{
+		ProtocolVersion: ProtocolVersion, AuthMethod: "hmac-sha256",
 		Op:        OpHello,
-		Version:   "BridgeCore (26.5.8)",
-		System:    "Unix-based(linux-x64)",
-		Dotnet:    ".NET 8.0.0",
+		Version:   "EasyBotCE Bridge/2",
+		System:    "Go",
+		Dotnet:    "",
 		SessionID: s.id,
-		Token:     uuid.NewString(),
+		Token:     nonce,
 		Interval:  int(HeartbeatInterval.Seconds()),
 	}); err != nil {
 		m.logger.Warn("bridge hello failed", "remote", remoteAddr, "error", err)
@@ -121,10 +132,10 @@ func (m *Manager) serve(conn *websocket.Conn, remoteAddr string) {
 		return
 	}
 
-	record, token, err := m.authenticate(identify.Token)
+	record, token, err := m.authenticateIdentify(identify, s, nonce)
 	if err != nil {
 		m.logger.Warn("bridge authentication rejected", "remote", remoteAddr, "error", err)
-		m.closeWith(s, "错误的令牌, 请检查令牌是否正确!!!")
+		m.closeWith(s, "鉴权失败或协议版本不兼容，请检查 server_id、令牌及系统时间")
 		return
 	}
 
@@ -132,12 +143,16 @@ func (m *Manager) serve(conn *websocket.Conn, remoteAddr string) {
 	s.serverName = record.Name
 	s.pluginVersion = identify.PluginVersion
 	s.token = token
+	s.description = identify.ServerDescription
+	s.capabilities = identify.Capabilities
 
 	// Make the authenticated session visible before acknowledging identification.
 	// Clients may immediately query status after receiving IdentifySuccess.
-	m.register(s)
+	if !m.register(s) {
+		return
+	}
 	defer m.unregister(s)
-	if err := s.writeJSON(IdentifySuccessPacket{Op: OpIdentifySuccess, ServerName: record.Name, SupportGetPluginList: true}); err != nil {
+	if err := s.writeJSON(IdentifySuccessPacket{Op: OpIdentifySuccess, ServerName: record.Name, SupportGetPluginList: false}); err != nil {
 		return
 	}
 
@@ -148,9 +163,6 @@ func (m *Manager) serve(conn *websocket.Conn, remoteAddr string) {
 		m.call.OnState(record.ID, true)
 	}
 	defer func() {
-		if m.call.OnState != nil {
-			m.call.OnState(record.ID, false)
-		}
 		m.logger.Info("minecraft bridge disconnected", "server", record.Name, "server_id", record.ID)
 	}()
 
@@ -160,7 +172,24 @@ func (m *Manager) serve(conn *websocket.Conn, remoteAddr string) {
 		if err != nil {
 			return
 		}
+		if m.session(s.serverID) != s {
+			return
+		}
+		if !s.validateEnvelope(raw) {
+			m.markError(s, "协议帧无效、过期或重复")
+			m.closeWith(s, "协议帧无效、过期或重复")
+			return
+		}
 		m.touch(s.serverID)
+		if s.protocolVersion == ProtocolVersion {
+			var envelope struct {
+				Payload json.RawMessage `json:"payload"`
+			}
+			if json.Unmarshal(raw, &envelope) != nil || len(envelope.Payload) == 0 {
+				return
+			}
+			raw = envelope.Payload
+		}
 		m.handleFrame(s, raw)
 	}
 }
@@ -185,6 +214,38 @@ func (m *Manager) handleFrame(s *session, raw []byte) {
 	}
 
 	switch header.ExecOp {
+	case ExecStartBind:
+		var request struct {
+			PlayerName string `json:"player_name"`
+		}
+		if json.Unmarshal(raw, &request) != nil {
+			return
+		}
+		result := map[string]any{"op": OpCallBack, "callback_id": header.CallbackID, "exec_op": header.ExecOp, "code": "", "time": ""}
+		if m.call.OnStartBind != nil {
+			if challenge, err := m.call.OnStartBind(s.serverID, request.PlayerName); err == nil {
+				result["code"] = challenge.Code
+				result["time"] = time.Until(challenge.ExpiresAt).Round(time.Second).String()
+			}
+		}
+		s.writeJSON(result)
+	case ExecGetSocialAccount:
+		var request struct {
+			PlayerName string `json:"player_name"`
+		}
+		if json.Unmarshal(raw, &request) != nil {
+			return
+		}
+		result := map[string]any{"op": OpCallBack, "callback_id": header.CallbackID, "exec_op": header.ExecOp, "time": "", "platform": "", "name": "", "uuid": ""}
+		if m.call.OnGetSocialAccount != nil {
+			if binding, err := m.call.OnGetSocialAccount(s.serverID, request.PlayerName); err == nil {
+				result["time"] = binding.BoundAt.Format(time.RFC3339)
+				result["platform"] = binding.PlatformType
+				result["name"] = binding.DisplayName
+				result["uuid"] = binding.AccountID
+			}
+		}
+		s.writeJSON(result)
 	case ExecSyncMessage:
 		var packet SyncMessagePacket
 		if json.Unmarshal(raw, &packet) != nil {
@@ -202,7 +263,15 @@ func (m *Manager) handleFrame(s *session, raw []byte) {
 		if json.Unmarshal(raw, &packet) != nil {
 			return
 		}
-		m.setPlayers(s.serverID, 0)
+		if packet.Players != "" {
+			m.setPlayers(s.serverID, countPlayers(packet.Players))
+		} else {
+			delta := -1
+			if packet.IsEnter {
+				delta = 1
+			}
+			m.adjustPlayers(s.serverID, delta)
+		}
 		if m.call.OnEnterExit != nil {
 			m.call.OnEnterExit(s.serverID, packet)
 		}
@@ -221,42 +290,39 @@ func (m *Manager) handleFrame(s *session, raw []byte) {
 		}
 		m.setPlayers(s.serverID, countPlayers(packet.Players))
 	case ExecPlayerJoin:
-		// ReportPlay is a binding gate in the original product. Without the
-		// binding workflow the host always admits the player.
-		s.writeJSON(map[string]any{
-			"op":           OpCallBack,
-			"callback_id":  header.CallbackID,
-			"kick":         false,
-			"kick_message": "",
-		})
-	}
-}
-
-// authenticate resolves a server record by its bridge token. Only configured
-// servers can connect; an unknown token is rejected.
-func (m *Manager) authenticate(token string) (store.Record, string, error) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return store.Record{}, "", ErrUnknownServer
-	}
-	records, err := m.db.List(context.Background(), "servers")
-	if err != nil {
-		return store.Record{}, "", err
-	}
-	for _, record := range records {
-		// A disabled server must not accept connections, even with a valid token.
-		if !record.Enabled {
-			continue
+		var packet SyncMessagePacket
+		_ = json.Unmarshal(raw, &packet)
+		var config struct {
+			RequireBinding bool   `json:"requireBinding"`
+			KickMessage    string `json:"kickMessage"`
 		}
-		if ServerToken(record) == token {
-			return record, token, nil
+		if server, err := m.db.Get(context.Background(), "servers", s.serverID); err == nil {
+			_ = json.Unmarshal([]byte(server.Detail), &config)
 		}
+		result := model.BindingJoinResult{}
+		if m.call.OnPlayerJoin != nil {
+			var err error
+			result, err = m.call.OnPlayerJoin(s.serverID, packet, config.RequireBinding, config.KickMessage)
+			if err != nil {
+				result.Kick = config.RequireBinding
+				result.KickMessage = "绑定校验暂时不可用，请稍后重试。"
+			}
+		} else if config.RequireBinding {
+			bound, err := m.db.IsPlayerBound(context.Background(), packet.Player.PlayerUUID)
+			if err != nil || !bound {
+				result.Kick = true
+				result.KickMessage = config.KickMessage
+				if result.KickMessage == "" {
+					result.KickMessage = "请先完成账号绑定后再进入服务器。"
+				}
+			}
+		}
+		s.writeJSON(map[string]any{"op": OpCallBack, "callback_id": header.CallbackID, "kick": result.Kick, "kick_message": result.KickMessage})
 	}
-	return store.Record{}, "", ErrUnknownServer
 }
 
 // ServerToken extracts the bridge token from a server record's detail JSON.
-func ServerToken(record store.Record) string {
+func ServerToken(record model.Record) string {
 	var detail map[string]json.RawMessage
 	if json.Unmarshal([]byte(record.Detail), &detail) != nil {
 		return ""
@@ -272,41 +338,70 @@ func ServerToken(record store.Record) string {
 	return ""
 }
 
-func (m *Manager) register(s *session) {
+func (m *Manager) register(s *session) bool {
 	m.mu.Lock()
-	if previous := m.sessions[s.serverID]; previous != nil && previous != s {
+	if m.closed {
 		m.mu.Unlock()
-		previous.writeClose("该服务器已从其他地方连接")
-		m.mu.Lock()
+		return false
 	}
+	previous := m.sessions[s.serverID]
 	m.sessions[s.serverID] = s
 	now := time.Now().UTC()
 	m.statuses[s.serverID] = Status{
-		ServerID:      s.serverID,
-		ServerName:    s.serverName,
-		State:         "online",
-		PluginVersion: s.pluginVersion,
-		RemoteAddr:    s.remoteAddr,
-		ConnectedAt:   &now,
-		LastSeenAt:    &now,
+		ServerID: s.serverID, ServerName: s.serverName, State: "online",
+		PluginVersion: s.pluginVersion, ServerDescription: s.description,
+		ProtocolVersion: s.protocolVersion, ConnectionID: s.id, Capabilities: s.capabilities,
+		RemoteAddr: s.remoteAddr, ConnectedAt: &now, LastSeenAt: &now,
 	}
 	m.mu.Unlock()
+	if previous != nil && previous != s {
+		m.closeWith(previous, "该服务器已从其他地方连接")
+	}
+	return true
 }
 
 func (m *Manager) unregister(s *session) {
 	s.closePending()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if current := m.sessions[s.serverID]; current != s {
+		m.mu.Unlock()
 		return
 	}
 	delete(m.sessions, s.serverID)
 	status := m.statuses[s.serverID]
 	status.State = "offline"
-	status.PluginVersion = ""
 	status.OnlinePlayers = 0
 	status.ConnectedAt = nil
 	m.statuses[s.serverID] = status
+	m.mu.Unlock()
+	if m.call.OnState != nil {
+		m.call.OnState(s.serverID, false)
+	}
+}
+
+func (m *Manager) markError(s *session, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessions[s.serverID] != s {
+		return
+	}
+	status := m.statuses[s.serverID]
+	status.LastError = message
+	m.statuses[s.serverID] = status
+}
+
+// Close closes hijacked WebSockets, which http.Server.Shutdown does not close.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	m.closed = true
+	sessions := make([]*session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+	for _, s := range sessions {
+		m.closeWith(s, "Bridge 服务已停止")
+	}
 }
 
 func (m *Manager) touch(serverID string) {
@@ -316,6 +411,17 @@ func (m *Manager) touch(serverID string) {
 	now := time.Now().UTC()
 	status.LastSeenAt = &now
 	status.State = "online"
+	m.statuses[serverID] = status
+}
+
+func (m *Manager) adjustPlayers(serverID string, delta int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := m.statuses[serverID]
+	status.OnlinePlayers += delta
+	if status.OnlinePlayers < 0 {
+		status.OnlinePlayers = 0
+	}
 	m.statuses[serverID] = status
 }
 
@@ -430,13 +536,18 @@ func countPlayers(value string) int {
 
 // session is one authenticated plugin connection.
 type session struct {
-	id            string
-	serverID      string
-	serverName    string
-	pluginVersion string
-	token         string
-	remoteAddr    string
-	conn          *websocket.Conn
+	id               string
+	serverID         string
+	serverName       string
+	pluginVersion    string
+	token            string
+	remoteAddr       string
+	description      string
+	capabilities     []string
+	protocolVersion  int
+	sentSequence     uint64
+	receivedSequence uint64
+	conn             *websocket.Conn
 
 	writeMu   sync.Mutex
 	pendingMu sync.Mutex
@@ -447,6 +558,26 @@ func (s *session) writeJSON(value any) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	_ = s.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if s.protocolVersion == ProtocolVersion {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		var packet map[string]any
+		if err := json.Unmarshal(raw, &packet); err != nil {
+			return err
+		}
+		s.sentSequence++
+		packet["protocol_version"] = ProtocolVersion
+		packet["type"] = packetType(packet)
+		packet["payload"] = copyPacketPayload(packet)
+		packet["connection_id"] = s.id
+		packet["server_id"] = s.serverID
+		packet["request_id"] = uuid.NewString()
+		packet["timestamp"] = time.Now().Unix()
+		packet["sequence"] = s.sentSequence
+		return s.conn.WriteJSON(packet)
+	}
 	return s.conn.WriteJSON(value)
 }
 
@@ -505,4 +636,28 @@ func (s *session) call(ctx context.Context, packet RunCommandPacket) ([]byte, er
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func packetType(packet map[string]any) string {
+	if value, ok := packet["exec_op"].(string); ok && value != "" {
+		return value
+	}
+	if value, ok := packet["op"].(float64); ok {
+		return fmt.Sprintf("op_%d", int(value))
+	}
+	if value, ok := packet["op"].(OpCode); ok {
+		return fmt.Sprintf("op_%d", value)
+	}
+	return "packet"
+}
+
+func copyPacketPayload(packet map[string]any) map[string]any {
+	payload := make(map[string]any, len(packet))
+	for key, value := range packet {
+		if key == "protocol_version" || key == "connection_id" || key == "server_id" || key == "request_id" || key == "timestamp" || key == "sequence" || key == "type" || key == "payload" {
+			continue
+		}
+		payload[key] = value
+	}
+	return payload
 }

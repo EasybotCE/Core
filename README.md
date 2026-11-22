@@ -1,6 +1,6 @@
 # EasybotCE Core
 
-EasybotCE 的主程序，使用 Go 提供管理 API、Vue 3 提供网页管理台，默认使用 SQLite 保存数据。便携包包含程序和页面资源，解压后即可运行。
+EasybotCE 的主程序，使用 Go 提供管理 API、Vue 3 提供网页管理台，默认使用 SQLite 保存数据。发布包包含程序和页面资源，解压后即可运行。
 
 ## 文档导航
 
@@ -23,8 +23,8 @@ EasybotCE 的主程序，使用 Go 提供管理 API、Vue 3 提供网页管理�
 
 ## 快速开始
 
-1. 从 [发布版本](https://github.com/EasybotCE/Core/releases) 下载适合当前系统的便携压缩包。
-2. 解压到可写目录，保留包内的 `web` 目录。
+1. 从 [发布版本](https://github.com/EasybotCE/Core/releases) 下载适合当前系统的发布包。
+2. 解压到可写目录，页面资源已内置于程序中。
 3. Windows 双击 `easybotce.exe`；Linux 在解压目录运行 `./easybotce`，缺少执行权限时先执行 `chmod +x easybotce`。
 4. 浏览器打开 `http://127.0.0.1:5001`，运行期间保持程序窗口或终端打开。
 
@@ -34,13 +34,13 @@ Windows 双击启动失败时会显示错误原因，按回车后关闭窗口；
 
 ## 配置与登录
 
-程序在首次启动时于程序目录创建 `config.json`，并生成 12 位数字管理密码写入配置；该密码仅在首次启动控制台显示一次。SQLite 数据库及其父目录（默认 `appdata/easybot.db`）也会在启动时自动创建。管理页面静态资源需由便携包提供，源码运行前需先构建前端；运行时不会生成空白页面文件。修改配置后需重启。配置结构为 `server`、`bridge`、`database`、`auth` 和 `logging`，完整示例见 [config.example.json](internal/config/config.example.json)。`EASYBOT_CONFIG` 可指定配置文件，环境变量可覆盖对应设置。
+程序在首次启动时于程序目录创建 `config.json`，并生成 12 位数字管理密码写入配置；该密码仅在首次启动控制台显示一次。SQLite 数据库及其父目录（默认 `appdata/easybot.db`）也会在启动时自动创建。管理页面静态资源随发布程序构建并内置；直接源码运行时需先构建前端资源。修改配置后需重启。配置结构为 `server`、`bridge`、`database`、`auth` 和 `logging`，完整示例见 [config.example.json](internal/config/config.example.json)。`EASYBOT_CONFIG` 可指定配置文件，环境变量可覆盖对应设置。
 
 默认监听 `0.0.0.0:5001`，本机及外网访问均需使用 `auth.password` 登录；Bridge 默认独立监听 `0.0.0.0:26991`。密码以明文保存在配置文件中，请限制文件访问权限。外网访问前配置防火墙，仅开放必要端口；通过公网传输凭据时建议配置 HTTPS。旧版 .NET 格式配置不会被静默覆盖，需迁移到新结构。
 
 ## 升级与原版迁移
 
-升级前停止程序，备份并保留 `config.json` 和 `appdata`，再替换程序与 `web` 页面资源。已有 CE 数据库也可通过 `EASYBOT_SQLITE_PATH` 指定路径继续使用。
+升级前停止程序，备份并保留 `config.json` 和 `appdata`，再替换程序。已有 CE 数据库也可通过 `EASYBOT_SQLITE_PATH` 指定路径继续使用。
 
 原版 `.NET appsettings.json` 与 `token.txt` 不再作为 CE 启动配置；请按示例迁移监听地址、数据库、日志和 Bridge 设置。复制启动配置不会导入原版数据库、适配器或插件数据，原版数据库需要单独迁移。
 
@@ -52,9 +52,9 @@ Windows 双击启动失败时会显示错误原因，按回车后关闭窗口；
 node build.mjs
 ```
 
-脚本自动安装前端依赖、构建页面、编译程序并生成便携包：Windows 输出 `release/easybotce-windows-amd64.zip`，Linux 输出对应平台的 `.tar.gz`；本地编译程序同时保存在 `bin`。
+脚本自动安装前端依赖、构建页面、编译程序并生成发布包：Windows 输出 `release/easybotce-windows-amd64.zip`，Linux 输出对应平台的 `.tar.gz`；本地编译程序同时保存在 `bin`。
 
-手动运行、热更新和测试命令见 [开发说明](docs/开发说明.md)，前端开发见 [管理台说明](web/README.md)。CI 包含跨平台测试、静态检查、便携包构建和数据库集成测试。
+手动运行、热更新和测试命令见 [开发说明](docs/开发说明.md)，前端开发见 [管理台说明](web/README.md)。CI 包含跨平台测试、静态检查、发布包构建和数据库集成测试。
 
 贡献者和开发代理须遵守 [贡献规范](CONTRIBUTING.md)。建议使用中文说明 PR 和提交；中文 CI 仅提醒，不阻断合并。使用 AI 辅助贡献时须披露工具及用途，详细要求见贡献规范。
 
@@ -62,7 +62,7 @@ node build.mjs
 
 | 路径 | 内容 |
 | --- | --- |
-| `cmd/easybot/` | 守护进程及管理 Web 服务入口 |
+| `cmd/EasybotCE` | 守护进程及管理 Web 服务入口 |
 | `internal/` | 配置、存储、适配器、运行日志和版本化管理 API |
 | `web/` | Vue 3、TypeScript、Tailwind CSS v4 管理台 |
 | `.github/workflows/` | CI 工作流 |
@@ -72,3 +72,7 @@ node build.mjs
 ## 许可证与署名
 
 本仓库使用 [CC BY-NC 4.0（`CC-BY-NC-4.0`）](https://creativecommons.org/licenses/by-nc/4.0/) 许可证，该许可证不允许商业使用。分享或改编时，请注明 EasybotCE 及本仓库来源，附上许可证链接、标明改动，并保留已有作者、版权和许可声明。详见 [署名说明](AUTHORS.md)。
+
+### Minecraft Bridge
+
+Core 提供独立 Bridge WebSocket 服务端（默认端口 26991），不包含 Minecraft 插件本体。可使用授权范围内已有的 EasyBot 插件连接；协议兼容、安全开关、TLS 和真实验收边界见 [`docs/BRIDGE_MCDR.md`](docs/BRIDGE_MCDR.md)。

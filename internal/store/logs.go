@@ -5,44 +5,31 @@ import (
 	"strings"
 	"time"
 
-	"easybot/internal/runtime"
+	"easybot/internal/model"
+	"easybot/internal/security"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
-type LogSettings struct {
-	Persistent    bool      `json:"persistent"`
-	RetentionDays int       `json:"retentionDays"`
-	MaxRows       int       `json:"maxRows"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-}
+type LogSettings = model.LogSettings
 
 func (s *Store) GetLogSettings(ctx context.Context) (LogSettings, error) {
 	var settings LogSettings
-	err := s.db.QueryRowContext(ctx, `SELECT persistent,retention_days,max_rows,updated_at FROM runtime_log_settings WHERE id=1`).Scan(&settings.Persistent, &settings.RetentionDays, &settings.MaxRows, &settings.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT level,persistent,retention_days,max_rows,updated_at FROM runtime_log_settings WHERE id=1`).Scan(&settings.Level, &settings.Persistent, &settings.RetentionDays, &settings.MaxRows, &settings.UpdatedAt)
 	return settings, err
 }
 
 func (s *Store) SaveLogSettings(ctx context.Context, settings LogSettings) error {
-	_, err := s.db.ExecContext(ctx, s.query(`UPDATE runtime_log_settings SET persistent=?,retention_days=?,max_rows=?,updated_at=? WHERE id=1`), settings.Persistent, settings.RetentionDays, settings.MaxRows, time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, s.query(`UPDATE runtime_log_settings SET level=?,persistent=?,retention_days=?,max_rows=?,updated_at=? WHERE id=1`), settings.Level, settings.Persistent, settings.RetentionDays, settings.MaxRows, time.Now().UTC())
 	return err
 }
 
-type LogFilter struct {
-	Level     string
-	Component string
-	RequestID string
-	Query     string
-	From      *time.Time
-	To        *time.Time
-	Limit     int
-	Offset    int
-}
+type LogFilter = model.LogFilter
 
-func (s *Store) WriteLog(ctx context.Context, entry runtime.LogEntry) error {
-	_, err := s.db.ExecContext(ctx, s.query(`INSERT INTO runtime_logs(id,occurred_at,level,component,message,request_id) VALUES(?,?,?,?,?,?)`), entry.ID, entry.Time.UTC(), entry.Level, entry.Source, runtime.Redact(entry.Message), entry.RequestID)
+func (s *Store) WriteLog(ctx context.Context, entry model.LogEntry) error {
+	_, err := s.db.ExecContext(ctx, s.query(`INSERT INTO runtime_logs(id,occurred_at,level,component,message,request_id) VALUES(?,?,?,?,?,?)`), entry.ID, entry.Time.UTC(), entry.Level, entry.Source, security.Redact(entry.Message), entry.RequestID)
 	return err
 }
 
@@ -60,7 +47,7 @@ func (s *Store) CountLogIDs(ctx context.Context, ids []string) (int, error) {
 	return count, err
 }
 
-func (s *Store) ListLogs(ctx context.Context, filter LogFilter) ([]runtime.LogEntry, int, error) {
+func (s *Store) ListLogs(ctx context.Context, filter LogFilter) ([]model.LogEntry, int, error) {
 	where := []string{"1=1"}
 	args := make([]any, 0, 6)
 	if filter.Level != "" {
@@ -104,9 +91,9 @@ func (s *Store) ListLogs(ctx context.Context, filter LogFilter) ([]runtime.LogEn
 		return nil, 0, err
 	}
 	defer rows.Close()
-	items := make([]runtime.LogEntry, 0)
+	items := make([]model.LogEntry, 0)
 	for rows.Next() {
-		var entry runtime.LogEntry
+		var entry model.LogEntry
 		if err := rows.Scan(&entry.ID, &entry.Time, &entry.Level, &entry.Source, &entry.Message, &entry.RequestID); err != nil {
 			return nil, 0, err
 		}

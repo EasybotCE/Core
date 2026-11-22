@@ -312,7 +312,7 @@ server:
   public_url: ""
 database:
   driver: sqlite
-  dsn: appdata/easybot.db
+  dsn: appdata/EasybotCE.db
 security:
   session_secret_file: appdata/secrets/session.key
   trusted_proxies: []

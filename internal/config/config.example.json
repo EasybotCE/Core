@@ -8,7 +8,11 @@
     }
   },
   "bridge": {
-    "address": "0.0.0.0:26991"
+    "address": "0.0.0.0:26991",
+    "tls": {
+      "certificate": "",
+      "privateKey": ""
+    }
   },
   "database": {
     "url": "",
@@ -18,6 +22,6 @@
     "password": ""
   },
   "logging": {
-    "level": "info"
+    "level": "debug"
   }
 }

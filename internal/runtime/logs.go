@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"easybot/internal/model"
+	"easybot/internal/security"
 )
 
 // Logs owns the process log buffer and creates module-scoped loggers. Every
@@ -45,13 +47,13 @@ type moduleHandler struct {
 	groups []string
 }
 
-func (h *moduleHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.output.Enabled(ctx, level)
-}
+func (h *moduleHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *moduleHandler) Handle(ctx context.Context, record slog.Record) error {
-	if err := h.output.Handler().Handle(ctx, record); err != nil {
-		return err
+	if h.output.Enabled(ctx, record.Level) {
+		if err := h.output.Handler().Handle(ctx, record); err != nil {
+			return err
+		}
 	}
 	var message strings.Builder
 	message.WriteString(record.Message)
@@ -114,7 +116,7 @@ func appendLogAttr(message *strings.Builder, requestID *string, group string, at
 		*requestID = attr.Value.String()
 	}
 	value := Redact(fmt.Sprint(attr.Value.Any()))
-	if sensitiveLogKey.MatchString(key) {
+	if security.SensitiveLogKey.MatchString(key) {
 		value = "[REDACTED]"
 	}
 	message.WriteByte(' ')
@@ -133,14 +135,7 @@ func attrsToArgs(attrs []slog.Attr) []any {
 
 var _ slog.Handler = (*moduleHandler)(nil)
 
-type LogEntry struct {
-	ID        string    `json:"id"`
-	Time      time.Time `json:"time"`
-	Level     string    `json:"level"`
-	Source    string    `json:"source"`
-	Message   string    `json:"message"`
-	RequestID string    `json:"requestId,omitempty"`
-}
+type LogEntry = model.LogEntry
 
 type LogBuffer struct {
 	mu      sync.RWMutex
@@ -218,36 +213,20 @@ func (b *LogBuffer) Recent(limit int) []LogEntry {
 	return result
 }
 
-var (
-	sensitiveLogKey  = regexp.MustCompile(`(?i)(token|password|passwd|secret|api[_-]?key|authorization|dsn|challenge|verification[_-]?code)$`)
-	secretAssignment = regexp.MustCompile(`(?i)(token|password|passwd|secret|api[_-]?key|authorization|dsn|challenge|verification[_-]?code)(\s*[=:]\s*)([^\s&,;]+)`)
-	bearerToken      = regexp.MustCompile(`(?i)bearer\s+[a-z0-9._~+/-]+=*`)
-	urlCredentials   = regexp.MustCompile(`(?i)(://[^:/\s]+:)[^@/\s]+@`)
-)
-
-func Redact(value string) string {
-	value = bearerToken.ReplaceAllString(value, "Bearer [REDACTED]")
-	value = urlCredentials.ReplaceAllString(value, "$1[REDACTED]@")
-	return secretAssignment.ReplaceAllStringFunc(value, func(match string) string {
-		parts := secretAssignment.FindStringSubmatch(match)
-		if len(parts) != 4 {
-			return "[REDACTED]"
-		}
-		return parts[1] + parts[2] + "[REDACTED]"
-	})
-}
+func Redact(value string) string { return security.Redact(value) }
 
 type LogWriter interface {
 	WriteLog(context.Context, LogEntry) error
 }
 
 type AsyncLogWriter struct {
-	queue   chan LogEntry
-	writer  LogWriter
-	dropped atomic.Uint64
-	failed  atomic.Uint64
-	enabled atomic.Bool
-	done    chan struct{}
+	queue    chan LogEntry
+	writer   LogWriter
+	dropped  atomic.Uint64
+	failed   atomic.Uint64
+	enabled  atomic.Bool
+	minLevel atomic.Int32
+	done     chan struct{}
 }
 
 func NewAsyncLogWriter(writer LogWriter, capacity int) *AsyncLogWriter {
@@ -256,12 +235,18 @@ func NewAsyncLogWriter(writer LogWriter, capacity int) *AsyncLogWriter {
 	}
 	a := &AsyncLogWriter{queue: make(chan LogEntry, capacity), writer: writer, done: make(chan struct{})}
 	a.enabled.Store(true)
+	a.minLevel.Store(int32(slog.LevelDebug))
 	go a.run()
 	return a
 }
 
 func (a *AsyncLogWriter) TryWrite(entry LogEntry) {
-	if !a.enabled.Load() {
+	levels := map[string]int32{"debug": int32(slog.LevelDebug), "info": int32(slog.LevelInfo), "warn": int32(slog.LevelWarn), "error": int32(slog.LevelError)}
+	level, ok := levels[strings.ToLower(entry.Level)]
+	if strings.TrimSpace(entry.Level) == "" {
+		level, ok = int32(slog.LevelDebug), true
+	}
+	if !ok || level < a.minLevel.Load() || !a.enabled.Load() {
 		return
 	}
 	select {
@@ -274,6 +259,12 @@ func (a *AsyncLogWriter) TryWrite(entry LogEntry) {
 func (a *AsyncLogWriter) Dropped() uint64         { return a.dropped.Load() }
 func (a *AsyncLogWriter) Failed() uint64          { return a.failed.Load() }
 func (a *AsyncLogWriter) SetEnabled(enabled bool) { a.enabled.Store(enabled) }
+func (a *AsyncLogWriter) SetMinLevel(level string) {
+	levels := map[string]int32{"debug": int32(slog.LevelDebug), "info": int32(slog.LevelInfo), "warn": int32(slog.LevelWarn), "error": int32(slog.LevelError)}
+	if value, ok := levels[strings.ToLower(level)]; ok {
+		a.minLevel.Store(value)
+	}
+}
 
 func (a *AsyncLogWriter) Close(ctx context.Context) {
 	close(a.queue)

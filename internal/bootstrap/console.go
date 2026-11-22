@@ -1,25 +1,25 @@
-package main
+package bootstrap
 
 import (
 	"context"
-	"easybot/internal/runtime"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+
+	"easybot/internal/runtime"
 )
 
 type consoleHandler struct {
 	minimum slog.Level
 	mu      *sync.Mutex
 	attrs   []slog.Attr
-	group   string
+	groups  []string
 }
 
-var useConsoleColors = os.Getenv("NO_COLOR") == "" && enableConsoleColors()
+var useColors = os.Getenv("NO_COLOR") == "" && enableColors()
 
 func consoleLogger(levels ...slog.Level) *slog.Logger {
 	minimum := slog.LevelInfo
@@ -62,18 +62,22 @@ func (h *consoleHandler) Handle(_ context.Context, record slog.Record) error {
 		message = strings.TrimPrefix(message, "["+module+"] ")
 	}
 	var line strings.Builder
-	level, color := "INFO", "97"
+	level, colorCode := "INFO", "97"
 	switch {
 	case record.Level >= slog.LevelError+4:
-		level, color = "FATL", "97;41"
+		level, colorCode = "FATL", "97;41"
 	case record.Level >= slog.LevelError:
-		level, color = "EROR", "97;41"
+		level, colorCode = "EROR", "97;41"
 	case record.Level >= slog.LevelWarn:
-		level, color = "WARN", "93"
+		level, colorCode = "WARN", "93"
 	case record.Level < slog.LevelInfo:
-		level, color = "DBUG", "37"
+		level, colorCode = "DBUG", "37"
 	}
-	fmt.Fprint(&line, consoleColor("[", "90"), consoleColor(record.Time.Format("15:04:05"), "37"), consoleColor("][", "90"), consoleColor(level, color), consoleColor("][", "90"), consoleColor(module, "96"), consoleColor("]:", "90"), consoleColor(message, "97"))
+	fmt.Fprint(&line, colorize("[", "90"), colorize(record.Time.Format("15:04:05"), "37"), colorize("][", "90"), colorize(level, colorCode), colorize("][", "90"), colorize(module, "96"))
+	for _, group := range h.groups {
+		fmt.Fprint(&line, colorize("][", "90"), colorize(group, "96"))
+	}
+	fmt.Fprint(&line, colorize("]:", "90"), colorize(message, "97"))
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, err := fmt.Fprintln(os.Stdout, line.String())
@@ -113,45 +117,14 @@ func (h *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 func (h *consoleHandler) WithGroup(name string) slog.Handler {
 	next := *h
 	if name != "" {
-		next.group += name + "."
+		next.groups = append(append([]string(nil), h.groups...), name)
 	}
 	return &next
 }
 
-func consoleColor(text, color string) string {
-	if !useConsoleColors {
+func colorize(text, color string) string {
+	if !useColors {
 		return text
 	}
 	return "\x1b[" + color + "m" + text + "\x1b[0m"
-}
-
-func printBanner(logger *slog.Logger) {
-	// 使用与原版 FigletText 相同的字形，保留 CE 的产品名称。
-	logo := "  _____                         _               _      ____   _____ \n" +
-		" | ____|   __ _   ___   _   _  | |__     ___   | |_   / ___| | ____|\n" +
-		" |  _|    / _` | / __| | | | | | '_ \\   / _ \\  | __| | |     |  _|  \n" +
-		" | |___  | (_| | \\__ \\ | |_| | | |_) | | (_) | | |_  | |___  | |___ \n" +
-		" |_____|  \\__,_| |___/  \\__, | |_.__/   \\___/   \\__|  \\____| |_____|\n" +
-		"                        |___/                                       "
-	fmt.Fprintln(os.Stdout, consoleColor(logo, "96"))
-	logger.Info("EasybotCE v0.1.0-dev")
-}
-
-func printStartup(logger *slog.Logger, address string, tls bool, password string, initialPassword bool) {
-	host, port, _ := net.SplitHostPort(address)
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	scheme := "http"
-	if tls {
-		scheme = "https"
-	}
-	logger.Info("[WebUI] 管理地址: " + scheme + "://" + net.JoinHostPort(host, port))
-	logger.Info("[WebUI] 已启用管理密码登录")
-	if initialPassword {
-		// Credentials are intentionally printed once to the terminal, never to persisted logs.
-		fmt.Fprintln(os.Stdout, consoleColor("[WebUI] 首次启动默认管理密码: "+password, "93"))
-		fmt.Fprintln(os.Stdout, consoleColor("[WebUI] 默认密码仅显示一次，请保存后及时修改 config.json", "93"))
-	}
-	logger.Info("[WebUI] 服务已启动，按 Ctrl+C 停止")
 }

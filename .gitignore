@@ -6,6 +6,7 @@ token.txt
 .env
 .env.*
 !.env.example
+/Easybot
 
 # Go outputs
 /bin/
@@ -15,6 +16,8 @@ token.txt
 # Frontend outputs and local tooling state
 /web/node_modules/
 /web/dist/
+/internal/webui/dist/*
+!/internal/webui/dist/placeholder.txt
 /web/.vscode/
 /web/.idea/
 /.idea/
@@ -33,3 +36,8 @@ token.txt
 
 # CodeBuddy 
 .codebuddy/
+
+# Python test/build artifacts (reference tooling only)
+__pycache__/
+*.py[cod]
+!/internal/webui/dist/placeholder.txt

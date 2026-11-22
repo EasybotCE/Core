@@ -18,8 +18,8 @@ import (
 	"easybot/internal/store"
 )
 
-func TestUnauthorizedRequestsAreDebugLogged(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+func TestUnauthorizedRequestsAreWarnLogged(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "EasybotCE.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,12 +34,34 @@ func TestUnauthorizedRequestsAreDebugLogged(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
 	}
 	entries := logs.Recent(1)
-	if len(entries) != 1 || entries[0].Level != "debug" || entries[0].Source != "api" {
-		t.Fatalf("unauthorized request log = %#v, want api debug entry", entries)
+	if len(entries) != 1 || entries[0].Level != "warn" || entries[0].Source != "api" {
+		t.Fatalf("unauthorized request log = %#v, want api warn entry", entries)
 	}
 }
+
+func TestRequestLogLevelsFollowHTTPStatus(t *testing.T) {
+	tests := []struct {
+		status int
+		want   string
+	}{
+		{http.StatusCreated, "debug"}, {http.StatusBadRequest, "warn"},
+		{http.StatusUnauthorized, "warn"}, {http.StatusBadGateway, "error"}, {http.StatusInternalServerError, "error"},
+	}
+	for _, test := range tests {
+		logs := runtime.NewLogs(10, nil)
+		server := &server{logs: logs}
+		handler := server.observe(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(test.status) }))
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/test", nil)
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+		entries := logs.Recent(1)
+		if len(entries) != 1 || entries[0].Level != test.want {
+			t.Errorf("status %d log = %#v, want %s", test.status, entries, test.want)
+		}
+	}
+}
+
 func TestModuleLogsPersistDiagnosticContext(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	db, err := store.Open(filepath.Join(t.TempDir(), "EasybotCE.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +93,55 @@ func TestModuleLogsPersistDiagnosticContext(t *testing.T) {
 	}
 }
 
+func TestBindingAPIChallengeConfirmAuditAndUnbind(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "bindings-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createTestSession(t, db)
+	handler := New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), runtime.NewLogs(10, nil))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/bindings/challenges", strings.NewReader(`{"playerUuid":"player-api","groupId":"group-1"}`))
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var challenge struct {
+		Code string `json:"code"`
+	}
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &challenge) != nil || challenge.Code == "" {
+		t.Fatalf("challenge response %d: %s", response.Code, response.Body.String())
+	}
+	confirm := func(group string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"code": challenge.Code, "platformType": "onebot11", "accountId": "account-1", "displayName": "Test", "groupId": group})
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/bindings/confirm", strings.NewReader(string(body)))
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if got := confirm("different-group"); got.Code != http.StatusCreated {
+		t.Fatalf("confirmation status %d: %s", got.Code, got.Body.String())
+	}
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/bindings", nil)
+	list.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+	listed := httptest.NewRecorder()
+	handler.ServeHTTP(listed, list)
+	var items []store.Binding
+	if listed.Code != http.StatusOK || json.Unmarshal(listed.Body.Bytes(), &items) != nil || len(items) != 1 {
+		t.Fatalf("binding list %d: %s", listed.Code, listed.Body.String())
+	}
+	remove := httptest.NewRequest(http.MethodDelete, "/api/v1/bindings/"+items[0].ID, nil)
+	remove.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+	removed := httptest.NewRecorder()
+	handler.ServeHTTP(removed, remove)
+	if removed.Code != http.StatusNoContent {
+		t.Fatalf("unbind status %d: %s", removed.Code, removed.Body.String())
+	}
+	if audit, err := db.BindingAudit(context.Background(), 10); err != nil || len(audit) != 2 {
+		t.Fatalf("audit entries %#v, %v", audit, err)
+	}
+}
+
 func createTestSession(t *testing.T, db *store.Store) {
 	t.Helper()
 	if _, err := db.CreateInitialAdmin(context.Background(), "admin", "internal-test-identity", sessionHash("test-session"), time.Now().Add(time.Hour)); err != nil {
@@ -78,8 +149,44 @@ func createTestSession(t *testing.T, db *store.Store) {
 	}
 }
 
+func TestGroupsAreNotManagedAsManualRecords(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "EasybotCE.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createTestSession(t, db)
+	handler := New(db, slog.New(slog.NewTextHandler(io.Discard, nil)), runtime.NewLogs(10, nil))
+
+	requests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/v1/records?kind=groups", ""},
+		{http.MethodPost, "/api/v1/records", `{"kind":"groups","name":"manual group"}`},
+		{http.MethodPut, "/api/v1/records/groups/group-id", `{"name":"manual group"}`},
+		{http.MethodDelete, "/api/v1/records/groups/group-id", ""},
+	}
+	for _, test := range requests {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			request.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+		})
+	}
+	groups, err := db.List(context.Background(), "groups")
+	if err != nil || len(groups) != 0 {
+		t.Fatalf("manual group records persisted: %#v, err=%v", groups, err)
+	}
+}
+
 func TestRecordCRUDAndSession(t *testing.T) {
-	db, err := store.Open(t.TempDir() + "/easybot.db")
+	db, err := store.Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +250,7 @@ func TestRecordCRUDAndSession(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "POST /api/v1/records") {
 		t.Fatalf("logs returned %d: %s", response.Code, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodPut, "/api/v1/logs/settings", strings.NewReader(`{"persistent":false,"retentionDays":45,"maxRows":2000}`))
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/logs/settings", strings.NewReader(`{"level":"debug","persistent":false,"retentionDays":45,"maxRows":2000}`))
 	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: "test-session"})
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
@@ -161,7 +268,7 @@ func TestRecordCRUDAndSession(t *testing.T) {
 }
 
 func TestAdapterCredentialsAreRedactedAndPreservedOnUpdate(t *testing.T) {
-	db, err := store.Open(t.TempDir() + "/easybot.db")
+	db, err := store.Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +321,7 @@ func TestAdapterCredentialsAreRedactedAndPreservedOnUpdate(t *testing.T) {
 }
 
 func TestAdapterAPIReportsStoppedAndRejectsUnknownID(t *testing.T) {
-	db, err := store.Open(t.TempDir() + "/easybot.db")
+	db, err := store.Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +340,7 @@ func TestAdapterAPIReportsStoppedAndRejectsUnknownID(t *testing.T) {
 }
 
 func TestPasswordLoginAndSessionAuthorization(t *testing.T) {
-	db, err := store.Open(t.TempDir() + "/easybot.db")
+	db, err := store.Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +364,12 @@ func TestPasswordLoginAndSessionAuthorization(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("login returned %d: %s", response.Code, response.Body.String())
 	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"token":"123456789012"}`))
+	response = httptest.NewRecorder()
+	makeHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("token credential login returned %d: %s", response.Code, response.Body.String())
+	}
 	cookies := response.Result().Cookies()
 	if len(cookies) == 0 {
 		t.Fatal("login did not set a session cookie")
@@ -271,7 +384,7 @@ func TestPasswordLoginAndSessionAuthorization(t *testing.T) {
 }
 
 func TestRecentLogTotalIncludesMemoryOnlyEntries(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	db, err := store.Open(filepath.Join(t.TempDir(), "EasybotCE.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +409,7 @@ func TestRecentLogTotalIncludesMemoryOnlyEntries(t *testing.T) {
 	}
 }
 func TestLoginFailuresResetAfterSuccessfulAuthentication(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	db, err := store.Open(filepath.Join(t.TempDir(), "EasybotCE.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +439,7 @@ func TestLoginFailuresResetAfterSuccessfulAuthentication(t *testing.T) {
 	}
 }
 func TestEveryListenerRequiresAuthentication(t *testing.T) {
-	db, err := store.Open(t.TempDir() + "/easybot.db")
+	db, err := store.Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +486,7 @@ func TestLoginRateLimit(t *testing.T) {
 }
 
 func TestAPIVersionPrefix(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "easybot.db"))
+	db, err := store.Open(filepath.Join(t.TempDir(), "EasybotCE.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,5 +505,13 @@ func TestAPIVersionPrefix(t *testing.T) {
 		if response.Code != test.want {
 			t.Errorf("GET %s returned %d, want %d", test.path, response.Code, test.want)
 		}
+	}
+}
+
+func TestWriteAdapterPermissionErrorUsesForbidden(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeAdapterError(response, &onebot11.APIError{Code: "adapter_permission_denied", Message: "permission denied"})
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusForbidden, response.Body.String())
 	}
 }
