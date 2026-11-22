@@ -63,6 +63,9 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: 构建便携包
         run: node build.mjs
+      - name: 前端请求客户端测试
+        working-directory: web
+        run: npm test
       - name: 上传便携包
         uses: actions/upload-artifact@v4
         with:

@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"easybot/internal/store"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,6 +19,11 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, err error) {
+	var validation *store.ValidationError
+	if errors.As(err, &validation) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "validation_error", "field": validation.Field, "message": validation.Message})
+		return
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "record not found"})
 		return

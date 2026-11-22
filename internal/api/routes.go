@@ -6,6 +6,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	s.registerSystemRoutes(mux)
 	s.registerAuthRoutes(mux)
 	s.registerRecordRoutes(mux)
+	s.registerCommandRoutes(mux)
 	s.registerAdapterRoutes(mux)
 	s.registerLogRoutes(mux)
 	s.registerBridgeRoutes(mux)
@@ -61,4 +62,10 @@ func (s *server) registerBridgeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/bridge/{id}/status", s.bridgeStatus)
 	mux.HandleFunc("POST /api/v1/bridge/{id}/send", s.bridgeSend)
 	mux.HandleFunc("POST /api/v1/servers/{id}/token", s.rotateServerToken)
+}
+
+func (s *server) registerCommandRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/commands/validate", s.validateCommand)
+	mux.HandleFunc("POST /api/v1/commands/simulate", s.simulateCommand)
+	mux.HandleFunc("POST /api/v1/commands/diagnose", s.diagnoseCommands)
 }

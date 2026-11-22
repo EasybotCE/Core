@@ -20,7 +20,7 @@ func TestRecordLifecycle(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	created, err := db.Save(ctx, Record{Kind: "commands", Name: "!status", Detail: `{"mode":"text"}`, Enabled: true})
+	created, err := db.Save(ctx, Record{Kind: "commands", Name: "!status", Detail: contractJSON(t, DefaultCommandConfig()), Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
