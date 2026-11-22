@@ -541,6 +541,11 @@ func (s *Store) List(ctx context.Context, kind string) ([]Record, error) {
 }
 
 func (s *Store) Save(ctx context.Context, item Record) (Record, error) {
+	if item.Kind == "commands" {
+		if _, err := ValidateCommandConfig(item.Detail); err != nil {
+			return item, err
+		}
+	}
 	if !Kinds[item.Kind] {
 		return item, errors.New("unsupported record kind")
 	}

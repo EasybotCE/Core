@@ -79,6 +79,9 @@ func NewForListenerWithRuntimes(db *store.Store, logger *slog.Logger, logs *runt
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/dashboard/data", s.dashboard)
+	mux.HandleFunc("POST /api/commands/simulate", s.simulateCommand)
+	mux.HandleFunc("POST /api/commands/diagnose", s.diagnoseCommands)
+	mux.HandleFunc("POST /api/commands/validate", s.validateCommand)
 	mux.HandleFunc("GET /api/records", s.listRecords)
 	mux.HandleFunc("POST /api/records", s.createRecord)
 	mux.HandleFunc("PUT /api/records/{kind}/{id}", s.updateRecord)
@@ -1110,6 +1113,11 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, err error) {
+	var validation *store.ValidationError
+	if errors.As(err, &validation) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "validation_error", "field": validation.Field, "message": validation.Message})
+		return
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "record not found"})
 		return
