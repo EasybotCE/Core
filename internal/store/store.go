@@ -30,11 +30,7 @@ func Open(dsn string) (*Store, error) {
 				return nil, fmt.Errorf("resolve database directory: %w", err)
 			}
 			dir := filepath.Dir(executable)
-			// 保留开发目录 bin/easybotce 与 appdata 并列的布局。
-			if filepath.Base(dir) == "bin" {
-				dir = filepath.Dir(dir)
-			}
-			source = filepath.Join(dir, "appdata", "easybot.db")
+			source = filepath.Join(dir, "appdata", "EasybotCE.db")
 		}
 		if err := os.MkdirAll(filepath.Dir(source), 0750); err != nil {
 			return nil, err
@@ -52,6 +48,11 @@ func Open(dsn string) (*Store, error) {
 		dialect = "postgres"
 	} else if strings.Contains(source, "://") && !strings.HasPrefix(source, "file://") {
 		return nil, fmt.Errorf("unsupported database URL scheme")
+	}
+	if dialect == "sqlite" {
+		if err := os.MkdirAll(filepath.Dir(source), 0750); err != nil {
+			return nil, err
+		}
 	}
 	driver := map[string]string{"sqlite": "sqlite", "mysql": "mysql", "postgres": "pgx"}[dialect]
 	db, err := sql.Open(driver, source)
@@ -219,7 +220,81 @@ func (s *Store) migrate(ctx context.Context) error {
 			tx.Rollback()
 			return err
 		}
-		return tx.Commit()
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		version = 4
+	}
+	if version < 5 {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		statements := []string{
+			`CREATE TABLE IF NOT EXISTS binding_challenges (code VARCHAR(32) PRIMARY KEY, player_uuid VARCHAR(128) NOT NULL, server_id VARCHAR(36) NOT NULL DEFAULT '', group_id VARCHAR(128) NOT NULL DEFAULT '', expires_at TIMESTAMP NOT NULL, max_attempts INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, consumed_at TIMESTAMP NULL, created_at TIMESTAMP NOT NULL)`,
+			`CREATE TABLE IF NOT EXISTS player_bindings (id VARCHAR(36) PRIMARY KEY, player_uuid VARCHAR(128) NOT NULL, server_id VARCHAR(36) NOT NULL DEFAULT '', platform_type VARCHAR(48) NOT NULL, account_id VARCHAR(128) NOT NULL, display_name VARCHAR(255) NOT NULL DEFAULT '', bound_at TIMESTAMP NOT NULL, UNIQUE(platform_type, account_id), UNIQUE(player_uuid, platform_type))`,
+			`CREATE TABLE IF NOT EXISTS binding_audit (id VARCHAR(36) PRIMARY KEY, action VARCHAR(32) NOT NULL, player_uuid VARCHAR(128) NOT NULL, platform_type VARCHAR(48) NOT NULL DEFAULT '', account_id VARCHAR(128) NOT NULL DEFAULT '', occurred_at TIMESTAMP NOT NULL, detail VARCHAR(512) NOT NULL DEFAULT '')`,
+			`CREATE INDEX idx_binding_player ON player_bindings(player_uuid)`,
+			`CREATE INDEX idx_binding_challenge_expiry ON binding_challenges(expires_at)`,
+		}
+		for _, statement := range statements {
+			if _, err = tx.ExecContext(ctx, statement); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, s.query(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`), 5, time.Now().UTC()); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		version = 5
+	}
+	if version < 6 {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		statements := []string{
+			`CREATE TABLE player_bindings_v6 (id VARCHAR(36) PRIMARY KEY, player_uuid VARCHAR(128) NOT NULL, server_id VARCHAR(36) NOT NULL DEFAULT '', platform_type VARCHAR(48) NOT NULL, account_id VARCHAR(128) NOT NULL, display_name VARCHAR(255) NOT NULL DEFAULT '', bound_at TIMESTAMP NOT NULL, UNIQUE(player_uuid, platform_type))`,
+			`INSERT INTO player_bindings_v6(id,player_uuid,server_id,platform_type,account_id,display_name,bound_at) SELECT id,player_uuid,server_id,platform_type,account_id,display_name,bound_at FROM player_bindings`,
+			`DROP TABLE player_bindings`,
+			`ALTER TABLE player_bindings_v6 RENAME TO player_bindings`,
+			`CREATE INDEX idx_binding_player ON player_bindings(player_uuid)`,
+		}
+		for _, statement := range statements {
+			if _, err = tx.ExecContext(ctx, statement); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, s.query(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`), 6, time.Now().UTC()); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+	}
+	if version < 7 {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE runtime_log_settings ADD COLUMN level VARCHAR(16) NOT NULL DEFAULT 'debug'`); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, s.query(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`), 7, time.Now().UTC()); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		version = 7
 	}
 	return nil
 }

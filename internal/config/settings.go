@@ -24,6 +24,10 @@ type fileConfig struct {
 	} `json:"server"`
 	Bridge struct {
 		Address string `json:"address"`
+		TLS     struct {
+			Certificate string `json:"certificate"`
+			PrivateKey  string `json:"privateKey"`
+		} `json:"tls"`
 	} `json:"bridge"`
 	Database struct {
 		URL        string `json:"url"`
@@ -40,49 +44,47 @@ type fileConfig struct {
 type Settings struct {
 	Path, Address, Certificate, PrivateKey, Database, SQLitePath, AllowedHosts string
 	BridgeAddress, Password                                                    string
+	BridgeCertificate, BridgePrivateKey                                        string
 	LogLevel                                                                   slog.Level
 }
 
 func defaults() fileConfig {
 	var value fileConfig
-	value.Server.Address = "127.0.0.1:5001"
+	value.Server.Address = "0.0.0.0:5001"
 	value.Server.AllowedHosts = "*"
-	value.Bridge.Address = "127.0.0.1:26991"
-	value.Database.SQLitePath = "appdata/easybot.db"
-	value.Logging.Level = "info"
+	value.Bridge.Address = "0.0.0.0:26991"
+	value.Database.SQLitePath = "appdata/EasybotCE.db"
+	value.Logging.Level = "debug"
 	return value
 }
 
+// BaseDirectory always refers to the executable, never to the shell's working
+// directory. IDE/go run builds therefore use their temporary binary directory;
+// developers can opt into a persistent location with EASYBOT_CONFIG.
 func BaseDirectory() (string, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Dir(executable)
-	if filepath.Base(dir) == "bin" {
-		dir = filepath.Dir(dir)
-	}
-	return dir, nil
+	return filepath.Dir(executable), nil
 }
 
 func Load() (Settings, bool, error) {
-	path := os.Getenv("EASYBOT_CONFIG")
-	if path == "" {
-		dir, err := BaseDirectory()
-		if err != nil {
-			return Settings{}, false, err
-		}
-		path = filepath.Join(dir, "config.json")
-		if executable, err := os.Executable(); err == nil {
-			adjacent := filepath.Join(filepath.Dir(executable), "config.json")
-			if _, err := os.Stat(adjacent); err == nil {
-				path = adjacent
-			} else if !os.IsNotExist(err) {
-				return Settings{}, false, err
-			}
-		}
+	dir, err := BaseDirectory()
+	if err != nil {
+		return Settings{}, false, err
 	}
-	return LoadFile(path)
+	return LoadFile(configPath(dir, os.Getenv("EASYBOT_CONFIG")))
+}
+
+func configPath(executableDirectory, configured string) string {
+	if configured == "" {
+		return filepath.Join(executableDirectory, "config.json")
+	}
+	if filepath.IsAbs(configured) {
+		return configured
+	}
+	return filepath.Join(executableDirectory, configured)
 }
 
 // LoadFile loads the Go-native config.json format. On first launch it creates
@@ -163,6 +165,10 @@ func LoadFile(path string) (Settings, bool, error) {
 	if err := ValidateListener(address, certificate, privateKey); err != nil {
 		return Settings{}, created || generatedPassword, err
 	}
+	bridgeCertificate, bridgePrivateKey := resolve(value.Bridge.TLS.Certificate), resolve(value.Bridge.TLS.PrivateKey)
+	if err := ValidateListener(bridgeAddress, bridgeCertificate, bridgePrivateKey); err != nil {
+		return Settings{}, created || generatedPassword, fmt.Errorf("Bridge TLS: %w", err)
+	}
 	level, err := parseLogLevel(value.Logging.Level)
 	if err != nil {
 		return Settings{}, created || generatedPassword, err
@@ -177,12 +183,14 @@ func LoadFile(path string) (Settings, bool, error) {
 			*target = env
 		}
 	}
+	sqlitePath, certificate, privateKey = resolve(sqlitePath), resolve(certificate), resolve(privateKey)
 	if err := ValidateListener(address, certificate, privateKey); err != nil {
 		return Settings{}, created || generatedPassword, err
 	}
 	return Settings{
 		Path: path, Address: address, BridgeAddress: bridgeAddress,
 		Certificate: certificate, PrivateKey: privateKey,
+		BridgeCertificate: bridgeCertificate, BridgePrivateKey: bridgePrivateKey,
 		Database: database, SQLitePath: sqlitePath, AllowedHosts: value.Server.AllowedHosts,
 		Password: value.Auth.Password, LogLevel: level,
 	}, created || generatedPassword, nil
@@ -236,9 +244,9 @@ func newDefaultPassword() (string, error) {
 
 func parseLogLevel(value string) (slog.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "debug":
+	case "", "debug":
 		return slog.LevelDebug, nil
-	case "", "info", "information":
+	case "info", "information":
 		return slog.LevelInfo, nil
 	case "warn", "warning":
 		return slog.LevelWarn, nil

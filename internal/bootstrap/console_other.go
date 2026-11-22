@@ -1,12 +1,12 @@
 //go:build !windows
 
-package main
+package bootstrap
 
 import "os"
 
-func enableConsoleColors() bool {
+func enableColors() bool {
 	info, err := os.Stdout.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0 && os.Getenv("TERM") != "dumb"
 }
 
-func waitAfterFailure() {}
+func WaitAfterFailure() {}

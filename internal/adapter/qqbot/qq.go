@@ -1,9 +1,12 @@
-package onebot11
+package qqbot
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,8 +15,24 @@ import (
 	"sync"
 	"time"
 
+	adaptertypes "easybot/internal/adapter/types"
 	"github.com/gorilla/websocket"
 )
+
+type State = adaptertypes.State
+
+const (
+	StateStopped      = adaptertypes.StateStopped
+	StateStarting     = adaptertypes.StateStarting
+	StateConnected    = adaptertypes.StateConnected
+	StateReconnecting = adaptertypes.StateReconnecting
+	StateStopping     = adaptertypes.StateStopping
+	StateFailed       = adaptertypes.StateFailed
+)
+
+type Status = adaptertypes.Status
+type Event = adaptertypes.Event
+type APIError = adaptertypes.APIError
 
 const (
 	qqAPIBase        = "https://api.sgroup.qq.com"
@@ -95,6 +114,7 @@ type QQRuntime struct {
 	heartbeat   int
 	token       string
 	tokenExpiry time.Time
+	retryAt     time.Time
 }
 
 func NewQQRuntime(id string, config QQConfig, onEvent func(Event)) *QQRuntime {
@@ -221,7 +241,7 @@ func (r *QQRuntime) connect(ctx context.Context) error {
 	r.heartbeat = interval
 	r.mu.Unlock()
 	r.writeMu.Lock()
-	err = conn.WriteJSON(map[string]any{"op": 2, "d": map[string]any{"token": "QQBot " + token, "intents": r.config.Intents, "shard": []int{0, 1}, "properties": map[string]string{"$os": "easybot", "$browser": "easybot", "$device": "easybot"}}})
+	err = conn.WriteJSON(map[string]any{"op": 2, "d": map[string]any{"token": "QQBot " + token, "intents": r.config.Intents, "shard": []int{0, 1}, "properties": map[string]string{"$os": "EasybotCE", "$browser": "EasybotCE", "$device": "EasybotCE"}}})
 	r.writeMu.Unlock()
 	if err != nil {
 		conn.Close()
@@ -418,6 +438,18 @@ func (r *QQRuntime) accessToken(ctx context.Context) (string, error) {
 	return out.AccessToken, nil
 }
 func (r *QQRuntime) request(ctx context.Context, method, url string, body any, out any, token string) error {
+	r.mu.RLock()
+	retryAt := r.retryAt
+	r.mu.RUnlock()
+	if delay := time.Until(retryAt); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 	var reader io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -445,7 +477,24 @@ func (r *QQRuntime) request(ctx context.Context, method, url string, body any, o
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{Code: "adapter_api_failed", Message: fmt.Sprintf("QQ Bot API 返回 HTTP %d", resp.StatusCode)}
+		message := fmt.Sprintf("QQ Bot API 返回 HTTP %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return &APIError{Code: "adapter_auth_failed", Message: "QQ Bot 鉴权失败，请检查 AppID 与 AppSecret", Retryable: false}
+		case http.StatusForbidden:
+			return &APIError{Code: "adapter_permission_denied", Message: "QQ Bot 权限不足，请检查机器人权限与事件订阅", Retryable: false}
+		case http.StatusTooManyRequests:
+			delay := retryAfter(resp.Header.Get("Retry-After"), time.Now())
+			r.mu.Lock()
+			if until := time.Now().Add(delay); until.After(r.retryAt) {
+				r.retryAt = until
+			}
+			r.mu.Unlock()
+			return &APIError{Code: "adapter_rate_limited", Message: "QQ Bot API 请求频率受限", Retryable: true}
+		default:
+			retryable := resp.StatusCode >= http.StatusInternalServerError
+			return &APIError{Code: "adapter_api_failed", Message: message, Retryable: retryable}
+		}
 	}
 	if out != nil && len(data) > 0 && json.Unmarshal(data, out) != nil {
 		return &APIError{Code: "adapter_protocol_error", Message: "QQ Bot API 响应无效"}
@@ -474,4 +523,53 @@ func TestQQConnection(ctx context.Context, config QQConfig) (map[string]any, err
 		return nil, err
 	}
 	return map[string]any{"connected": true, "authenticated": true, "gateway": g.URL, "intents": config.Intents}, nil
+}
+
+// Do not retry a possibly delivered message automatically. Subsequent requests
+// respect the platform's cooldown and remain cancellable by the caller.
+func retryAfter(value string, now time.Time) time.Duration {
+	if seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil && seconds >= 0 {
+		if seconds > 300 {
+			seconds = 300
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if date, err := http.ParseTime(value); err == nil {
+		delay := date.Sub(now)
+		if delay < 0 {
+			return 0
+		}
+		if delay > 5*time.Minute {
+			return 5 * time.Minute
+		}
+		return delay
+	}
+	return time.Second
+}
+
+func safeMessage(err error) string {
+	if err == nil {
+		return "QQ Bot 连接已断开"
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Message
+	}
+	return "QQ Bot 连接已断开"
+}
+
+func errorCode(err error) string {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Code
+	}
+	return "adapter_network_error"
+}
+
+func newEcho() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(value[:])
 }

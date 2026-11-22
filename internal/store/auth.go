@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"easybot/internal/model"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -13,10 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Admin struct {
-	ID       string
-	Username string
-}
+type Admin = model.Admin
 
 func (s *Store) SetupComplete(ctx context.Context) (bool, error) {
 	var complete bool

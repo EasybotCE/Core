@@ -11,6 +11,19 @@ import (
 	"testing"
 )
 
+func TestLoadFileCreatesMissingConfigDirectories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new", "install", "config.json")
+	settings, created, err := LoadFile(path)
+	if err != nil || !created {
+		t.Fatalf("load: created=%v err=%v", created, err)
+	}
+	if settings.Path != path {
+		t.Fatalf("config path = %q, want %q", settings.Path, path)
+	}
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		t.Fatalf("generated config is missing or invalid: info=%v err=%v", info, err)
+	}
+}
 func TestLoadFileSecuresExistingPortableTemplate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	template, err := os.ReadFile("config.example.json")
@@ -87,6 +100,28 @@ func TestLoadFileConfigOverridesAndLegacyRejected(t *testing.T) {
 	}
 	if _, _, err := LoadFile(path); err == nil {
 		t.Fatal("legacy .NET config accepted")
+	}
+}
+
+func TestBridgeTLSConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := `{"server":{"address":"127.0.0.1:5001"},"bridge":{"address":"127.0.0.1:26991","tls":{"certificate":"bridge.crt","privateKey":"bridge.key"}},"database":{"sqlitePath":"data.db"},"auth":{"password":"secret"}}`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings, _, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.BridgeCertificate != filepath.Join(filepath.Dir(path), "bridge.crt") || settings.BridgePrivateKey != filepath.Join(filepath.Dir(path), "bridge.key") {
+		t.Fatalf("Bridge TLS paths not resolved relative to config: %#v", settings)
+	}
+	content = strings.Replace(content, `"privateKey":"bridge.key"`, `"privateKey":""`, 1)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadFile(path); err == nil {
+		t.Fatal("partial Bridge TLS configuration was accepted")
 	}
 }
 

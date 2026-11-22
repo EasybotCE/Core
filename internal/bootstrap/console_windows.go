@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package bootstrap
 
 import (
 	"bufio"
@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func enableConsoleColors() bool {
+func enableColors() bool {
 	handle := windows.Handle(os.Stdout.Fd())
 	var mode uint32
 	if windows.GetConsoleMode(handle, &mode) != nil {
@@ -20,7 +20,7 @@ func enableConsoleColors() bool {
 	return windows.SetConsoleMode(handle, mode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING) == nil
 }
 
-func waitAfterFailure() {
+func WaitAfterFailure() {
 	var processes [2]uint32
 	getProcesses := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetConsoleProcessList")
 	count, _, _ := getProcesses.Call(uintptr(unsafe.Pointer(&processes[0])), uintptr(len(processes)))

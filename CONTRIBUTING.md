@@ -19,7 +19,7 @@ CI 在 PR 标题、正文说明或新增 commit 标题不含汉字时，通过�
 
 ## 开发与验证
 
-当前实现位于 仓库根目录包含 Go 后端（`cmd/easybot`、`internal`）和 Vue 管理台（`web`）。使用 Go 1.24+ 与 Node.js 20.19+，依赖以 `go.mod/go.sum` 和 `package-lock.json` 为准。详细运行方法见 [开发说明](docs/开发说明.md)。
+当前实现位于 仓库根目录包含 Go 后端（`cmd/EasybotCE`、`internal`）和 Vue 管理台（`web`）。使用 Go 1.24+ 与 Node.js 20.19+，依赖以 `go.mod/go.sum` 和 `package-lock.json` 为准。详细运行方法见 [开发说明](docs/开发说明.md)。
 
 后端在仓库根目录执行 `go test ./...` 和 `go vet ./...`；前端在 `web` 执行 `npm ci` 和 `npm run build`。涉及 MySQL/PostgreSQL 时使用空的专用测试库执行集成检查。Windows 启动改动需要验证从其他工作目录启动 exe，并在验证后停止服务。
 

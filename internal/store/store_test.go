@@ -5,15 +5,28 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"easybot/internal/runtime"
+
 	"github.com/google/uuid"
 )
 
+func TestOpenCreatesDatabaseDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "appdata", "nested", "EasybotCE.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		t.Fatalf("database file missing or invalid: info=%v err=%v", info, err)
+	}
+}
 func TestRecordLifecycle(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +56,7 @@ func TestRecordLifecycle(t *testing.T) {
 }
 
 func TestSaveRejectsInvalidInput(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +70,7 @@ func TestSaveRejectsInvalidInput(t *testing.T) {
 }
 
 func TestSchemaMigrationIsRecorded(t *testing.T) {
-	path := t.TempDir() + "/easybot.db"
+	path := t.TempDir() + "/EasybotCE.db"
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -66,8 +79,8 @@ func TestSchemaMigrationIsRecorded(t *testing.T) {
 	if err := db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 {
-		t.Fatalf("expected schema version 4, got %d", version)
+	if version != 7 {
+		t.Fatalf("expected schema version 7, got %d", version)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -77,7 +90,7 @@ func TestSchemaMigrationIsRecorded(t *testing.T) {
 		t.Fatalf("reopening migrated database: %v", err)
 	}
 	defer db.Close()
-	if err := db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+	if err := db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 7 {
 		t.Fatalf("repeated startup changed migration version to %d, error %v", version, err)
 	}
 }
@@ -98,8 +111,8 @@ func TestExternalDatabaseContract(t *testing.T) {
 	defer db.Close()
 
 	var version int
-	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
-		t.Fatalf("expected migration version 4, got %d, error %v", version, err)
+	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 7 {
+		t.Fatalf("expected migration version 7, got %d, error %v", version, err)
 	}
 
 	if _, err := db.db.ExecContext(ctx,
@@ -160,7 +173,7 @@ func TestExternalDatabaseContract(t *testing.T) {
 		t.Fatalf("reopening migrated database failed: %v", err)
 	}
 	defer db.Close()
-	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+	if err := db.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 7 {
 		t.Fatalf("restart changed migration version: version=%d error=%v", version, err)
 	}
 	if got, err := db.List(ctx, "servers"); err != nil || len(got) != 1 || got[0].Name != "contract-server-updated" {
@@ -180,7 +193,7 @@ func TestExternalDatabaseContract(t *testing.T) {
 }
 
 func TestRuntimeLogsFilteringRedactionAndRetention(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +229,7 @@ func TestRuntimeLogsFilteringRedactionAndRetention(t *testing.T) {
 }
 
 func TestInitialAdminAndSessionLifecycle(t *testing.T) {
-	db, err := Open(t.TempDir() + "/easybot.db")
+	db, err := Open(t.TempDir() + "/EasybotCE.db")
 	if err != nil {
 		t.Fatal(err)
 	}

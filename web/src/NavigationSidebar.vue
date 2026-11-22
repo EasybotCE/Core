@@ -18,7 +18,7 @@ const emit = defineEmits<{ select: [id: string] }>()
     <nav class="flex-1 overflow-auto">
       <template v-for="group in navigationGroups" :key="group">
         <p class="px-2 pb-1 pt-4 text-[13px] text-[#84949a]">{{ group }}</p>
-        <button v-for="item in navigation.filter(entry => entry.group === group)" :key="item.id" class="nav-link flex h-8.5 w-full items-center gap-2.5 rounded px-2 text-left text-[13px] text-[#bac5c8] hover:bg-[#243740] hover:text-white" :class="{ chosen: selected === item.id }" @click="emit('select', item.id)">
+        <button v-for="item in navigation.filter(entry => entry.group === group)" :key="item.id" class="nav-link flex h-8.5 w-full items-center gap-2.5 rounded px-2 text-left text-[13px] text-[#bac5c8] hover:bg-[#243740] hover:text-white" :class="{ chosen: selected === item.id }" :title="item.label" :aria-label="item.label" :aria-current="selected === item.id ? 'page' : undefined" @click="emit('select', item.id)">
           <component :is="item.icon" :size="16" /><span>{{ item.label }}</span><small v-if="item.kind === 'adapters' && counts.adapters" class="ml-auto">{{ counts.adapters }}</small>
         </button>
       </template>
