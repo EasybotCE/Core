@@ -1,0 +1,23 @@
+{
+  "server": {
+    "address": "127.0.0.1:5001",
+    "allowedHosts": "*",
+    "tls": {
+      "certificate": "",
+      "privateKey": ""
+    }
+  },
+  "bridge": {
+    "address": "127.0.0.1:26991"
+  },
+  "database": {
+    "url": "",
+    "sqlitePath": "appdata/easybot.db"
+  },
+  "auth": {
+    "password": ""
+  },
+  "logging": {
+    "level": "info"
+  }
+}

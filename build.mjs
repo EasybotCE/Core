@@ -1,10 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(fileURLToPath(import.meta.url))
-const dev = join(root, 'dev')
 const env = { ...process.env, CGO_ENABLED: '0' }
 
 function run(command, args, cwd) {
@@ -23,12 +22,12 @@ function run(command, args, cwd) {
   }
 }
 
-run('npm', ['ci', '--prefer-offline', '--no-audit', '--no-fund'], join(dev, 'web'))
-run('npm', ['run', 'build'], join(dev, 'web'))
-mkdirSync(join(dev, 'bin'), { recursive: true })
+run('npm', ['ci', '--prefer-offline', '--no-audit', '--no-fund'], join(root, 'web'))
+run('npm', ['run', 'build'], join(root, 'web'))
+mkdirSync(join(root, 'bin'), { recursive: true })
 const target = env.GOOS || (process.platform === 'win32' ? 'windows' : process.platform)
 const output = join('bin', target === 'windows' ? 'easybotce.exe' : 'easybotce')
-run('go', ['build', '-trimpath', '-o', output, './cmd/easybot'], dev)
+run('go', ['build', '-trimpath', '-o', output, './cmd/easybot'], root)
 
 const arch = env.GOARCH || ({ x64: 'amd64', ia32: '386' }[process.arch] || process.arch)
 const name = `easybotce-${target}-${arch}`
@@ -37,22 +36,23 @@ if (!/^easybotce-[a-z0-9]+-[a-z0-9]+$/.test(name)) throw new Error('无效的目
 mkdirSync(release, { recursive: true })
 const folder = mkdtempSync(join(release, '.package-'))
 try {
-  copyFileSync(join(dev, output), join(folder, target === 'windows' ? 'easybotce.exe' : 'easybotce'))
-  copyFileSync(join(dev, 'internal', 'config', 'appsettings.example.json'), join(folder, 'appsettings.json'))
-  cpSync(join(dev, 'web', 'dist'), join(folder, 'web', 'dist'), { recursive: true })
+  copyFileSync(join(root, output), join(folder, target === 'windows' ? 'easybotce.exe' : 'easybotce'))
+  copyFileSync(join(root, 'internal', 'config', 'config.example.json'), join(folder, 'config.json'))
+  chmodSync(join(folder, 'config.json'), 0o600)
+  cpSync(join(root, 'web', 'dist'), join(folder, 'web', 'dist'), { recursive: true })
   for (const file of ['LICENSE', 'AUTHORS.md']) copyFileSync(join(root, file), join(folder, file))
   writeFileSync(join(folder, '使用说明.txt'), [
     'EasybotCE 便携包',
     target === 'windows' ? '解压到可写目录后，双击 easybotce.exe 启动，运行期间保持窗口打开。' : '解压后运行 ./easybotce；若缺少执行权限，先执行 chmod +x easybotce。',
     '浏览器打开 http://127.0.0.1:5001，默认本机监听直接进入管理台，无需注册或登录。',
-    '修改同目录 appsettings.json 中 Kestrel.Endpoints.web_api.Url 可调整 WebUI 地址，保存后重启生效。',
-    'ServerOptions 是 Bridge 配置，默认端口 26991；当前 Bridge 运行时尚未实现。',
-    '迁移时可复制原版 appsettings.json，已有文件不会被重写；旧端口按原值保留。',
-    '非本地监听可直接使用 HTTP；网页只需输入登录 Token，不需要用户名或独立 API Key。',
-    '首次自动生成 12 位 Token，在控制台显示一次；token.txt 保存哈希，后续沿用。已有原版 token.txt 可直接复制到 exe 旁。',
+    '修改同目录 config.json 中 server.address 可调整管理服务监听地址，保存后重启生效。',
+    'Bridge 配置位于 bridge.address；Web 管理界面和后台服务由同一守护进程运行。',
+    '旧版 .NET 配置需手动迁移；旧字段会被识别并拒绝加载。',
+    '非本地监听可直接使用 HTTP；网页只需输入 config.json 中的管理密码，不需要用户名或独立 API Key。',
+    '首次启动生成 12 位数字管理密码并写入 config.json，仅在控制台显示一次。',
     '双击启动失败时，窗口显示错误原因并等待回车关闭。',
     '请保留包内 web 目录。运行数据自动保存到 appdata 目录。',
-    '升级前停止程序、备份并保留 appsettings.json、token.txt 和 appdata，再替换程序和 web 目录。',
+    '升级前停止程序、备份并保留 config.json 和 appdata，再替换程序和 web 目录。',
     '默认使用 SQLite，无需安装开发环境或数据库服务器。',
   ].join('\n') + '\n', 'utf8')
 
